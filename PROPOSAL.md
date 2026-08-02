@@ -1,40 +1,39 @@
-# Zenovators
+# Architecture Proposal
 
-**Tech for Good 2026** · GDG Coimbatore · Build weekend Aug 8–9, GRD College
+> Fill this out and commit it by **Friday, July 24 · 11:59 PM IST**. This file *is*
+> your Ideation-Phase submission — no separate form. Keep it living; update it as
+> your design evolves.
 
-**Track:** AI for Sustainable Cities & Climate Action
-**Team code:** TEAM-263
+- **Team name:** _<!-- your team name -->_
+- **Team code:** _<!-- e.g. TEAM-000 (from your organizers) -->_
+- **Track:** _<!-- AI for Good Health & Well-being / Zero Hunger & Economic Growth / Sustainable Cities & Climate Action / Strong Institutions -->_
+- **Members:** _<!-- Name (GitHub @handle), Name (@handle), … -->_
 
-## Problem
+## 1. Problem
+_What problem are you solving, and why does it matter? Who feels it today?_
 
-Cities approve buildings using today's climate data and don't check if they'll survive their own 20–40 year lifespan.
+## 2. Who it helps
+_The specific people or community that benefits, and how you'll reach them._
 
-## Who it helps
+## 3. Proposed solution
+_Your approach in a few sentences — what you'll build and how it addresses the problem._
 
-Building Permit Reviewers at municipal corporations (e.g., Greater Chennai Corporation) who manually check submitted building plans against flood-hazard maps with no forward-looking climate data, slowing every approval.
+## 4. High-level architecture
+_Key components and how data flows. A diagram is welcome (drop an image in `/docs`)._
 
-## Solution
+```
+<!-- e.g. Mobile PWA → Vercel function → Gemini API (OCR) → Postgres
+             ↘ Cloud Run cron for the nightly sync -->
+```
 
-- Enter an address in Chennai → the system pulls real CMIP6 flood/precipitation projections for that exact location via Google Earth Engine.
-- A machine learning model, trained on historical rainfall and flood-incident data for Tamil Nadu, predicts the year this specific site crosses a defined severe-flood-risk threshold — rather than reading a fixed value off a single projection curve — replacing the manual, static hazard-map cross-check a Building Permit Reviewer currently does by hand.
-- Demo: type an address, see it plotted on a map, drag a 2025–2055 timeline, watch the flood-risk trajectory and the year it crosses "severe" flash on screen — a clear before/after in under 90 seconds.
-- Output is a single score card usable directly at the point of permit review, not a public awareness map.
-- Post-hackathon: share the score card with 2–3 architects or municipal contacts for feedback on accuracy and format, then approach Greater Chennai Corporation's Town Planning division for a pilot conversation.
+## 5. Tech stack
+_Languages, frameworks, and the Google/AI tools you plan to use (Gemini API, Cloud Run, Firebase, etc.)._
 
-## Architecture
+## 6. Milestones to hackathon day
+_A rough plan from now to Aug 8–9._
 
-React web app (address input + map + timeline) → FastAPI backend → Google Earth Engine (CMIP6 flood/precipitation projections for the coordinate) → ML model (scikit-learn, trained on historical rainfall + flood-incident data) predicts the severe-risk-crossing year → PostGIS (spatial risk storage) → PostgreSQL (store the computed score per address).
+- [ ] …
+- [ ] …
 
-## Tech stack
-
-React, FastAPI, PostGIS, Google Earth Engine, scikit-learn
-
-## Getting started
-
-1. Accept your collaborator invite (check your email / GitHub notifications).
-2. Clone this repo and start building.
-3. Commit early and often — this repo is what you present on the day.
-
----
-
-_Created automatically when your proposal was validated._
+## 7. Open questions / help needed
+_Anything you're unsure about or want mentor input on._
