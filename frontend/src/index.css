@@ -1,0 +1,23 @@
+@import 'tailwindcss';
+
+/* Leaflet ships its own stylesheet; both are required for the map and the draw
+   toolbar to render correctly. */
+@import 'leaflet/dist/leaflet.css';
+@import 'leaflet-draw/dist/leaflet.draw.css';
+
+@theme {
+  /* Risk ramp used by the timeline. Red = crosses the threshold soon,
+     green = stays below it through 2055. Defined once here so the timeline,
+     the score badge and the chart cannot drift apart. */
+  --color-risk-critical: oklch(0.55 0.21 25);
+  --color-risk-high: oklch(0.68 0.18 45);
+  --color-risk-moderate: oklch(0.79 0.15 85);
+  --color-risk-low: oklch(0.75 0.16 135);
+  --color-risk-minimal: oklch(0.62 0.16 155);
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}

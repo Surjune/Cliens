@@ -1,0 +1,38 @@
+# Secrets — never commit. See .env.example for the required keys.
+.env
+.env.*
+!.env.example
+*-service-account*.json
+credentials/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Node
+node_modules/
+dist/
+.vite/
+coverage/
+*.local
+
+# Generated from the backend OpenAPI spec by `npm run generate:types`.
+# Deliberately COMMITTED rather than ignored: generating it requires a running
+# backend, so ignoring it would leave a fresh clone unable to typecheck or build
+# the frontend. Never hand-edit it — regenerate instead.
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json

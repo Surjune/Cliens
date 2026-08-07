@@ -1,0 +1,48 @@
+{
+  "name": "climate-lien-score",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Climate Lien Score — monorepo task runner. `make` is unavailable on Windows, so every project task is an npm script here.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d",
+    "db:migrate": "node scripts/py.mjs -m alembic upgrade head",
+    "db:seed": "node scripts/py.mjs -m app.cli seed-materials",
+
+    "dev:backend": "node scripts/py.mjs -m uvicorn app.main:app --reload --port 8010",
+    "dev:frontend": "npm run dev --workspace frontend",
+
+    "generate:types": "node scripts/generate-types.mjs",
+
+    "lint:backend": "node scripts/py.mjs -m ruff check --config pyproject.toml app ../db/migrations && node scripts/py.mjs -m black --check --config pyproject.toml app ../db/migrations",
+    "lint:frontend": "npm run lint --workspace frontend",
+    "lint": "npm run lint:backend && npm run lint:frontend",
+
+    "format:backend": "node scripts/py.mjs -m black --config pyproject.toml app ../db/migrations && node scripts/py.mjs -m ruff check --fix --config pyproject.toml app ../db/migrations",
+    "format:frontend": "npm run format --workspace frontend",
+    "format": "npm run format:backend && npm run format:frontend",
+
+    "typecheck:backend": "node scripts/py.mjs -m mypy app",
+    "typecheck:frontend": "npm run typecheck --workspace frontend",
+    "typecheck": "npm run typecheck:backend && npm run typecheck:frontend",
+
+    "test:backend": "node scripts/py.mjs -m pytest",
+    "test:backend:cov": "node scripts/py.mjs -m pytest --cov --cov-report=term-missing",
+    "test:frontend": "npm run test --workspace frontend",
+    "test:all": "npm run lint && npm run typecheck && npm run test:backend:cov && npm run test:frontend",
+
+    "train:models": "node scripts/py.mjs ../ml/train_all.py",
+    "smoke": "node scripts/smoke_test.mjs"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.5.0"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "model": "damage_calibration",
+  "artifact": "damage_calibration_20260806_uncommitted.pkl",
+  "trained_at": "2026-08-06T03:53:49.295344+00:00",
+  "git_commit": "uncommitted",
+  "random_seed": 20231204,
+  "sklearn_target": "damage_ratio",
+  "metrics": {
+    "r2": 0.9355429597362206,
+    "mae": 0.04623201182906165,
+    "train_samples": 4800,
+    "test_samples": 1200,
+    "target_units": "damage ratio, 0-1"
+  },
+  "training_data": "synthetic",
+  "honesty_note": "Trained on synthetic data generated from the vulnerability curve in core/constants.py. A high R2 shows the model recovered that curve; it is NOT evidence the curve describes real buildings. Not validated against observed Indian damage data.",
+  "feature_importances": {
+    "stress_total": 0.9540519423771923,
+    "stress_wind": 0.0034419581631006907,
+    "stress_flood": 0.003200660013747211,
+    "stress_heat": 0.002600357907510665,
+    "area_factor": 0.03670508153844925
+  }
+}
