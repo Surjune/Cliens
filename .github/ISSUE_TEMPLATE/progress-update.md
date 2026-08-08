@@ -5,8 +5,8 @@ title: "Progress update — <date>"
 labels: progress
 ---
 
-## What we shipped this week
+### What we shipped this week
 
-## Blockers / help needed
+### Blockers / help needed
 
-## Plan for next week
+### Plan for next week
