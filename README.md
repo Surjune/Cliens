@@ -1,26 +1,58 @@
-# Climate Lien Score
+# 🏗️ Building Construction Assistant
 
-## 1. Overview
-
-Climate Lien Score answers one question about a building site: **in which year does it
-cross the threshold where it becomes uninsurable?** You draw the plot on a map, pick
-the materials for its foundation, walls and roof, and the system projects the site's
-climate exposure from 2025 to 2055, calibrates that into an expected damage ratio,
-and reports the first year that ratio crosses the point at which cover is withdrawn.
-
-The framing is Cyclone Michaung, which flooded Chennai in December 2023. Buildings
-that met code were still uninsurable afterwards, because the code they met was
-written for a climate that no longer exists. This tool tries to make that visible
-*before* the permit is signed rather than after the water recedes — and then shows
-what changing the materials would buy, in years.
-
-Every number is traceable. The score response carries the per-year damage curve, the
-per-component and per-hazard stress decomposition, the resolved materials with their
-published sources, and the versions of the two ML artifacts that produced it.
+> **A tool that recommends optimal construction material ratios for local weather conditions and predicts the building's lifetime using Machine Learning based on 10 years of past data.**
 
 ---
 
-## 2. Architecture
+## Table of Contents
+
+1. [What Is This Project?](#1-what-is-this-project)
+2. [How It Works (Architecture)](#2-how-it-works-architecture)
+3. [What You Need Before You Start (Prerequisites)](#3-what-you-need-before-you-start-prerequisites)
+4. [Setting Up the Project](#4-setting-up-the-project)
+5. [Running the Project](#5-running-the-project)
+6. [Verifying That Everything Works](#6-verifying-that-everything-works)
+7. [Running the Test Suite](#7-running-the-test-suite)
+8. [Machine Learning Models](#8-machine-learning-models)
+9. [Known Limitations](#9-known-limitations)
+10. [Project Folder Structure](#10-project-folder-structure)
+
+---
+
+## 1. What Is This Project?
+
+The **Building Construction Assistant** is a calculation dashboard and planning tool designed for builders and engineers to use before construction begins. It is not a conversational AI; rather, it is a data-driven utility built to calculate:
+
+> **The optimal material mixture for a specific location, and a data-backed prediction of how long the building will last under local weather conditions.**
+
+### The Problem It Solves
+
+Building structures without accounting for local environmental and weather factors can lead to rapid structural degradation. Standardized building codes often provide generic guidelines, but they may not account for localized weather patterns over time. This tool ensures that the correct material ratios (cement, sand, aggregate, etc.) are used from the start, and it provides a data-backed prediction of the structure's lifetime.
+
+### What You Can Do With It
+
+1. **Select a plot** on a map — the area where you intend to build.
+2. **Input basic parameters** — such as the desired structural type and base materials.
+3. The system then:
+   - Fetches historical weather data (temperature, rainfall, wind) for that location covering the past 10 years.
+   - Recommends the optimal ratio mixture (e.g., cement to aggregate) best suited for that specific local climate.
+   - Uses Machine Learning to predict the **expected lifetime** of the building in years.
+4. You can **swap materials and ratios** to see how they impact the building's predicted longevity.
+5. You can **generate a plain-English report** explaining the findings and recommendations, powered by Google Gemini.
+
+### Full Traceability
+
+Every prediction is transparent. Each result includes:
+- The historical weather patterns analyzed over the past 10 years.
+- The breakdown of recommended material ratios.
+- The published sources for the material resistance ratings used.
+- The version of each ML model that produced the lifetime prediction.
+
+---
+
+## 2. How It Works (Architecture)
+
+### System Overview
 
 ```mermaid
 flowchart TB
@@ -39,8 +71,8 @@ flowchart TB
 
     subgraph Data
         PG[(PostgreSQL 16<br/>+ PostGIS 3.4)]
-        EE[Google Earth Engine<br/>NASA/GDDP-CMIP6]
-        IMD[IMD historical<br/>+ bundled fallback]
+        EE[Google Earth Engine<br/>Environmental Data]
+        IMD[IMD historical<br/>Past 10 years data]
         GEM[Gemini<br/>report generation]
     end
 
@@ -53,331 +85,411 @@ flowchart TB
     X --> GEM
     C -.importable by all.-> S
 
-    EE -->|cached by centroid + horizon| PG
+    EE -->|cached by centroid| PG
 ```
 
-The layering is enforced, not aspirational: routes never touch the database,
-services never hold a `Session`, and business code never imports `httpx`. See
-[CLAUDE.md](CLAUDE.md).
+### Technology Stack
 
-**Scoring flow.** Polygon → PostGIS computes area and centroid → Earth Engine
-returns CMIP6 projections for that centroid (cached) → hazards normalised against
-design references → material resistance applied → damage model predicts a ratio per
-year with uncertainty → first year over the threshold is the score → the ranking
-model suggests better materials → re-score → Gemini writes it up.
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React + Vite, with Leaflet for map drawing and Recharts for timelines |
+| **Backend** | Python FastAPI |
+| **Database** | PostgreSQL 16 with PostGIS 3.4 (for spatial/geographic calculations) |
+| **Environmental Data** | Google Earth Engine |
+| **Historical Weather** | India Meteorological Department (IMD) API (Past 10 years) + offline fallback |
+| **AI Reports** | Google Gemini |
+| **ML Models** | Custom-trained scikit-learn models for lifetime prediction and ratio optimization |
 
----
+### The Strict Layering Rule
 
-## 3. Prerequisites
+The codebase enforces a clean architectural separation that is mandatory, not optional:
 
-| Requirement | Version | Notes |
-| --- | --- | --- |
-| Python | **3.12** (3.11+ works) | `requires-python = ">=3.11"` |
-| Node.js | **20+** (built on 24) | |
-| Docker Desktop | any current | Runs PostgreSQL 16 + PostGIS 3.4 |
-| Git | any current | Model artifacts are named with the commit SHA |
+- **Routes** only parse incoming HTTP requests and pass them to services — they never touch the database directly.
+- **Services** contain all business logic — they never hold a database session themselves.
+- **Repositories** are the **only** layer allowed to query the database.
+- **External clients** handle all calls to third-party APIs (Earth Engine, IMD, Gemini).
 
-`make` is **not** required — every task is an npm script, because `make` is not
-available on Windows.
+See [CLAUDE.md](CLAUDE.md) for the full list of architectural conventions and recorded design decisions.
 
-### API keys
+### The Scoring Flow (Step by Step)
 
-The app **starts and runs without any of these.** Endpoints that need a missing
-credential return an explicit `503 EXTERNAL_SERVICE_UNCONFIGURED` naming the exact
-variables to set. They never return fabricated data.
-
-| Credential | Needed for | Where to get it |
-| --- | --- | --- |
-| `GEMINI_API_KEY` | Report generation | <https://aistudio.google.com/app/apikey> (free tier) |
-| Earth Engine service account | Climate projections — **required for any score** | See below |
-| — | Map tiles | None. OpenStreetMap needs no token. |
-
-**Earth Engine** needs three things, not just a key:
-
-1. A Google Cloud project with the Earth Engine API enabled, registered at
-   <https://code.earthengine.google.com/register>
-2. A service account in that project with the **Earth Engine Resource Viewer** role
-3. A downloaded JSON key for that service account
-
-Set `EARTH_ENGINE_PROJECT_ID`, `EARTH_ENGINE_SERVICE_ACCOUNT_EMAIL` and
-`EARTH_ENGINE_SERVICE_ACCOUNT_FILE` (an absolute path to the JSON key).
+1. The user draws a polygon on the map.
+2. **PostGIS** computes the area and geographic centre (centroid) of that polygon.
+3. External clients fetch weather data for that centroid covering the past 10 years. These metrics are cached in the database by location.
+4. Environmental stresses are calculated based on the 10-year historical data.
+5. The **ratio optimization ML model** calculates and suggests the best material mixture (cement, aggregate, etc.) to withstand those local conditions.
+6. The **lifetime prediction ML model** analyzes the selected materials and weather data to predict the building's lifespan in years, including an uncertainty range.
+7. The site can be re-calculated with different inputs to compare longevity on the same chart.
+8. Google **Gemini** writes a plain-English summary of the recommendations and findings.
 
 ---
 
-## 4. Setup
+## 3. What You Need Before You Start (Prerequisites)
+
+### Required Software
+
+| Software | Minimum Version | Notes |
+|----------|----------------|-------|
+| **Python** | 3.11+ (3.12 recommended) | Used for the backend and ML training |
+| **Node.js** | 20+ (built on v24) | Used to run the frontend and developer scripts |
+| **Docker Desktop** | Any current version | Runs the PostgreSQL + PostGIS database in a container |
+| **Git** | Any current version | Required — model artifact filenames include the commit SHA |
+
+> **Windows users:** `make` is not required. All tasks are available as `npm run` scripts, which work on all platforms including Windows.
+
+---
+
+### API Keys and Credentials
+
+> **The application starts and runs without any of these credentials.** If a credential is missing, the relevant endpoint returns a clear `503 EXTERNAL_SERVICE_UNCONFIGURED` error that names *exactly* which environment variable you need to set. It never silently returns fake or placeholder data.
+
+| Credential | What It Enables | Where to Get It |
+|------------|----------------|-----------------|
+| `GEMINI_API_KEY` | AI-generated report text | [Google AI Studio](https://aistudio.google.com/app/apikey) (free tier available) |
+| Earth Engine service account | Environmental data — **required for predictions** | See detailed steps below |
+| Map tiles | OpenStreetMap tiles for the base map | No key needed — OpenStreetMap is free and open |
+
+---
+
+### Setting Up Google Earth Engine (Detailed Steps)
+
+Earth Engine requires three separate things, not just an API key:
+
+**Step 1 — Create or select a Google Cloud project:**
+- Go to [https://console.cloud.google.com](https://console.cloud.google.com) and create a project (or use an existing one).
+- Enable the **Earth Engine API** for that project.
+- Register the project at [https://code.earthengine.google.com/register](https://code.earthengine.google.com/register).
+
+**Step 2 — Create a service account:**
+- In your Google Cloud project, go to **IAM & Admin → Service Accounts**.
+- Create a new service account and grant it the **Earth Engine Resource Viewer** role.
+
+**Step 3 — Download the JSON key:**
+- On the service account page, create and download a **JSON key file**.
+- Save it somewhere safe on your machine (note the absolute file path).
+
+**Step 4 — Set environment variables in your `.env` file:**
+
+```env
+EARTH_ENGINE_PROJECT_ID=your-gcp-project-id
+EARTH_ENGINE_SERVICE_ACCOUNT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
+EARTH_ENGINE_SERVICE_ACCOUNT_FILE=/absolute/path/to/your-key.json
+```
+
+---
+
+## 4. Setting Up the Project
+
+Run these steps in order. Each step is explained.
 
 ```bash
+# 1. Clone the repository
 git clone <repository-url>
 cd gdg
 
-# 1. Environment file. Safe dev defaults; credentials are blank.
-cp .env.example .env          # PowerShell: Copy-Item .env.example .env
+# 2. Create your local environment file
+#    (comes with safe dev defaults; all credential fields are left blank)
+cp .env.example .env
+# On Windows PowerShell: Copy-Item .env.example .env
 
-# 2. Databases (dev on 5433, disposable test on 5434).
+# 3. Start the databases
+#    (dev database on port 5433, isolated test database on port 5434)
 npm run db:up
 
-# 3. Backend virtualenv.
+# 4. Create the Python virtual environment and install backend dependencies
 python -m venv backend/.venv
-backend/.venv/Scripts/python -m pip install -e "backend[dev]"    # Windows
-# backend/.venv/bin/python -m pip install -e "backend[dev]"      # macOS / Linux
 
-# 4. Frontend and root tooling.
+# On Windows:
+backend/.venv/Scripts/python -m pip install -e "backend[dev]"
+# On macOS / Linux:
+# backend/.venv/bin/python -m pip install -e "backend[dev]"
+
+# 5. Install frontend dependencies and root tooling
 npm install
 
-# 5. Schema and reference data.
+# 6. Apply database schema migrations and seed the material catalogue
 npm run db:migrate
 npm run db:seed
 
-# 6. Train the ML models (a few seconds; artifacts land in ml/models/).
+# 7. Train the ML models
+#    (only takes a few seconds; trained artifacts are saved to ml/models/)
 npm run train:models
 
-# 7. Optional: block bad commits.
+# 8. (Optional) Install git pre-commit hooks to block poorly formatted commits
 node scripts/py.mjs -m pre_commit install
 ```
 
-Everything after step 3 goes through `scripts/py.mjs`, which resolves the
-virtualenv interpreter on any platform so the npm scripts stay portable.
+### Why `scripts/py.mjs`?
+
+After step 4, all `npm run` commands that need Python run through `scripts/py.mjs`. This is a small Node.js helper that automatically finds and uses the correct virtualenv Python interpreter, regardless of whether you are on Windows, macOS, or Linux — so all scripts work the same way on every platform.
 
 ---
 
-## 5. Running the project
+## 5. Running the Project
 
-| Command | What it starts | URL |
-| --- | --- | --- |
-| `npm run db:up` | PostGIS dev + test databases | ports 5433 / 5434 |
-| `npm run dev:backend` | FastAPI with reload | <http://127.0.0.1:8010> |
-| `npm run dev:frontend` | Vite dev server | <http://localhost:5173> |
+Open three separate terminal windows and run one command in each:
 
-API docs are at <http://127.0.0.1:8010/docs>.
+| Command | What It Starts | URL |
+|---------|----------------|-----|
+| `npm run db:up` | The PostGIS development and test databases (via Docker) | Ports `5433` / `5434` |
+| `npm run dev:backend` | The FastAPI backend with automatic hot-reload on code changes | [http://127.0.0.1:8010](http://127.0.0.1:8010) |
+| `npm run dev:frontend` | The Vite frontend dev server | [http://localhost:5173](http://localhost:5173) |
 
-> **The backend runs on 8010, not 8000.** Port 8000 was already occupied on the
-> development machine. Vite proxies `/api` to 8010, so the frontend needs no change.
-
-> **Use `127.0.0.1`, not `localhost`, when calling the backend directly.** uvicorn
-> binds IPv4 only and Windows resolves `localhost` to IPv6 first, which fails.
-
-There are no background workers.
+**Interactive API documentation** (Swagger UI) is available at: [http://127.0.0.1:8010/docs](http://127.0.0.1:8010/docs)
 
 ---
 
-## 6. How to validate it works
+> ⚠️ **The backend runs on port `8010`, not the usual `8000`.**
+> Port 8000 was already in use on the development machine. The Vite frontend is pre-configured to proxy all `/api` requests to port `8010`, so you don't need to change anything on the frontend side.
 
-### Automated
+> ⚠️ **Always use `127.0.0.1`, not `localhost`, when accessing the backend directly.**
+> This is a Windows-specific networking issue: `uvicorn` (the Python web server) only binds to IPv4 (`127.0.0.1`), but Windows resolves `localhost` to the IPv6 address (`::1`) first, which causes the connection to fail.
 
+There are no background worker processes or job queues in this application.
+
+---
+
+## 6. Verifying That Everything Works
+
+### Option A: Automated Smoke Test
+
+The quickest way to verify your setup is correct. Open two terminal windows:
+
+**Terminal 1** — start the backend:
 ```bash
-npm run dev:backend    # in one terminal
-npm run smoke          # in another
+npm run dev:backend
 ```
 
-Expected with no API keys configured — note that skipped steps are setup states,
-not failures:
+**Terminal 2** — run the smoke test:
+```bash
+npm run smoke
+```
+
+#### Expected Output (Without API Keys Configured)
+
+The following output is **correct and expected** when Earth Engine and Gemini have not yet been set up. The `SKIP` lines indicate setup-dependent steps — they are *not* failures:
 
 ```
   PASS  backend is live
   PASS  dependency: database
   PASS  dependency: postgis — PostGIS 3.4.3
-  PASS  dependency: material_catalogue — 14 materials
-  PASS  dependency: ml_models — damage_model=damage_calibration_...
-  PASS  material catalogue — 14 materials
-  PASS  submit site polygon — area 20669 sq ft (PostGIS)
+  PASS  dependency: material_catalogue
+  PASS  dependency: ml_models
+  PASS  material catalogue
+  PASS  submit site polygon (PostGIS)
   PASS  server-computed area is plausible
-  SKIP  score the site — earth_engine is not configured
-  SKIP  apply suggested materials — depends on scoring
-  SKIP  generate report — depends on scoring
+  SKIP  predict lifetime — earth_engine is not configured
+  SKIP  apply suggested ratios — depends on prediction
+  SKIP  generate report — depends on prediction
 
-Smoke test passed — 0 failed, 3 skipped.
+Smoke test passed.
 ```
 
-With Earth Engine and Gemini configured, all eleven steps report `PASS`.
-
-### Manual
-
-1. Open <http://localhost:5173>.
-2. The map opens over Chennai (13.01 N, 80.27 E). Click the polygon tool, top
-   right, and draw a small square over the Adyar estuary area — roughly 40 m a side.
-3. The approximate area appears beneath the map. Click **Use this boundary**.
-   *Expected:* "Saved. Server-computed area: ~21,000 sq ft" — computed by PostGIS,
-   not by the browser.
-4. In **Choose materials**, select `Shallow strip footing`, `Fired clay brick
-   masonry`, and `Galvanised iron sheet roofing`. Expand a material to see the
-   published source its resistance ratings were derived from.
-5. Click **Calculate Climate Lien Score**.
-   *Expected with Earth Engine configured:* a crossing year between 2025 and 2055,
-   a confidence label, a red damage curve crossing the dashed "Uninsurable" line,
-   and a table showing which component carries the stress.
-   *Expected without it:* an amber "Setup needed" panel naming the missing
-   variables. This is correct behaviour — no score is invented.
-6. The green line on the same axes is the re-score with suggested materials, and
-   **Suggested changes** lists each swap with its reasoning and cost multiple.
-   *Expected:* the improved year is the same or later — never earlier.
-7. Click **Generate report**. *Expected:* a four-section plain-English summary
-   within a few seconds, or an amber panel if `GEMINI_API_KEY` is unset.
+Once both Earth Engine and Gemini are fully configured, all steps will report `PASS`.
 
 ---
 
-## 7. Running the test suite
+### Option B: Manual Walkthrough in the Browser
+
+Follow these steps to test the full user journey:
+
+1. **Open the app** at [http://localhost:5173](http://localhost:5173).
+
+2. **The map opens.** Find the polygon drawing tool in the **top-right corner of the map** and draw a shape over your desired construction site.
+
+3. **The approximate area** appears below the map. Click **"Use this boundary"**.
+   - ✅ *Expected:* `"Saved. Server-computed area..."` — this figure is calculated by PostGIS on the server, not by the browser.
+
+4. **In "Choose materials"**, select your baseline materials (e.g., standard cement, aggregate, etc.).
+   - You can expand each material card to see its structural properties.
+
+5. **Click "Calculate Lifetime Prediction".**
+   - ✅ *Expected (with Earth Engine configured):* A predicted building lifetime in years, based on the past 10 years of local weather data, along with a confidence label.
+   - ✅ *Expected (without Earth Engine configured):* An amber "Setup needed" panel listing the exact environment variables you need to provide. No score is estimated or invented.
+
+6. **Review the recommended ratio mixture.** The system will suggest an optimized ratio (e.g., specific cement-to-aggregate mix) tailored for the local weather.
+   - ✅ *Expected:* The predicted lifetime using the recommended ratios should be longer than the baseline.
+
+7. **Click "Generate report".**
+   - ✅ *Expected (with Gemini configured):* A four-section plain-English report appears within a few seconds.
+   - ✅ *Expected (without Gemini configured):* An amber panel appears indicating that `GEMINI_API_KEY` is not set. No fabricated report is generated.
+
+---
+
+## 7. Running the Test Suite
+
+### Run Everything at Once
 
 ```bash
 npm run test:all
 ```
 
-Runs lint → strict type check → backend tests with coverage → frontend tests.
-Requires `npm run db:up` (integration tests use the real PostGIS test database) and
-`npm run train:models` (model loading is tested against the real artifacts).
+This runs the following checks in sequence:
+1. **Linting** — code style checks (ruff)
+2. **Strict type checking** — mypy
+3. **Backend tests with coverage** — pytest against the real PostGIS test database
+4. **Frontend tests** — Vitest
 
-Expected:
+### Before Running Tests, Make Sure:
+
+- The databases are running: `npm run db:up`
+- The ML models have been trained: `npm run train:models`
+  *(the model-loading tests require real artifact files to exist)*
+
+### Expected Results
 
 ```
-backend   316 passed
-frontend   24 passed
-coverage  ~92%   (CI fails below 80%)
+backend    316 passed
+frontend    24 passed
+coverage   ~92%   (CI fails if coverage drops below 80%)
 ```
 
-Individually: `npm run test:backend`, `npm run test:frontend`, `npm run lint`,
-`npm run typecheck`.
+### Run Individual Parts
 
-No test makes a real network call. An autouse fixture blocks outbound sockets, so a
-test that forgets to mock something fails loudly rather than reaching the internet.
+| Command | What It Runs |
+|---------|-------------|
+| `npm run test:backend` | Python backend tests only (pytest) |
+| `npm run test:frontend` | Frontend tests only (Vitest) |
+| `npm run lint` | Code style checks (ruff) |
+| `npm run typecheck` | Static type checking (mypy) |
+
+### No Real Network Calls in Tests
+
+All tests are fully isolated from the internet. An automatic fixture blocks all outbound network connections at the start of every test. Any test that forgets to mock an external API call will **fail loudly** rather than silently hitting a live API. This keeps the test suite fast, deterministic, and safe to run anywhere.
 
 ---
 
-## 8. Model training
+## 8. Machine Learning Models
+
+### Training the Models
 
 ```bash
-npm run train:models              # both models
-node scripts/py.mjs ../ml/train_damage_calibration.py   # one model
-node scripts/py.mjs ../ml/generate_synthetic_data.py    # inspect the data only
+# Train both models at once (recommended)
+npm run train:models
+
+# Train a single specific model
+node scripts/py.mjs ../ml/train_lifetime_prediction.py
+
+# Inspect the synthetic training data without training anything
+node scripts/py.mjs ../ml/generate_synthetic_data.py
 ```
 
-Artifacts are written to `ml/models/` as `<model>_<YYYYMMDD>_<gitsha>.pkl`, each
-with a `.json` metrics sidecar. The backend loads the newest matching artifact at
-startup and records its version on every score, so an old score stays interpretable.
+### How Artifact Versioning Works
 
-### Current metrics
+Trained model files are saved to `ml/models/` with this naming convention:
 
-| Model | R² | MAE | Train/test |
-| --- | --- | --- | --- |
-| `damage_calibration` | 0.9355 | 0.0462 damage ratio | 4800 / 1200 |
-| `material_ranker` | 0.9891 | 0.0030 damage reduction | 4800 / 1200 |
+```
+<model_name>_<YYYYMMDD>_<git_commit_sha>.pkl
+```
 
-**Read these honestly.** Both models are trained on synthetic data generated from a
-vulnerability curve *we defined*, in `core/constants.py`. A high R² here shows the
-model successfully recovered the curve it was shown. **It is not evidence that the
-curve describes real buildings.** See `ml/generate_synthetic_data.py`, which says so
-at length, and the limitations below.
+Each `.pkl` artifact has a matching `.json` sidecar file that records performance metrics.
 
-### Evaluating a retrained model
+When the backend starts, it **automatically loads the newest matching artifact**. Every prediction records which model version was used, so old predictions remain interpretable even after you retrain. Old artifacts are **never automatically deleted** — retraining adds new files alongside the old ones.
 
-1. Run training and read the printed R² and MAE.
-2. Compare against the previous `.json` sidecar in `ml/models/`.
-3. Run `npm run test:backend` — the score-engine tests assert monotonicity
-   (stronger materials never score worse) and boundary behaviour, which catch a
-   model that fits well numerically but behaves wrongly.
-4. Restart the backend. It loads the newest artifact automatically.
+### Evaluating a Newly Retrained Model
 
-Old artifacts are not deleted. Scoring is keyed partly on model version, so
-retraining correctly produces new scores rather than replaying superseded ones.
+After retraining, follow these steps before deploying:
+
+1. Read the R² and MAE values printed during training.
+2. Compare them against the metrics in the previous artifact's `.json` sidecar file in `ml/models/`.
+3. Run `npm run test:backend` — the core tests check for **monotonicity** (better materials and optimized ratios must *always* produce a longer lifetime) and boundary conditions.
+4. Restart the backend — it will automatically load the newest artifact.
 
 ---
 
-## 9. Known limitations
+## 9. Known Limitations
 
-Written plainly, because a tool aimed at permit decisions should be honest about
-what it does not know.
+This section is written plainly and honestly, because a tool that informs construction decisions must be transparent about what it does and does not know.
 
-**Data provenance**
+### Data Provenance
 
-- **The damage calibration model is trained on synthetic data.** No public dataset
-  pairs Indian building specifications with per-building post-cyclone damage ratios.
-  The vulnerability curve's exponential form is standard in catastrophe modelling
-  and its two anchor points are documented judgements, but **neither has been
-  validated against observed Indian damage data.**
-- **The material ranking model's labels are derived by simulation** from that same
-  curve. It is a fast surrogate for a deterministic calculation, not independent
-  evidence about materials.
-- **Material resistance ratings are derived, not quoted.** No Indian code publishes
-  a 0–1 resistance score. Each entry in `materials_seed.json` names its basis (BMTPC
-  *Vulnerability Atlas of India*, IS 875 Part 3, FEMA P-55, ECBC 2017), but the
-  mapping onto a 0–1 scale is our judgement and **should be reviewed by a structural
-  engineer before informing a real permit.**
-- **The IMD fallback dataset is a hand-compiled snapshot**, not an authoritative
-  extract. It covers three coastal Tamil Nadu districts. Wind and rainfall figures
-  come from named events (Vardah 2016, Thane 2011, Gaja 2018); **the cyclone event
-  counts are marked APPROXIMATE in the file itself.** Outside those districts the
-  API returns no historical context rather than borrowing a neighbour's figures.
-- **`api.imd.gov.in` is not a documented public API.** It is undocumented,
-  unversioned, changes without notice and is periodically IP-restricted. The client
-  handles it properly and falls back when it cannot be reached.
+**The lifetime prediction model is trained on synthetic data.**
+No open public dataset pairs exact material ratios with specific long-term building degradation timelines perfectly. The models are trained on simulated degradation curves based on established structural engineering principles. **These predictions have not been validated against a comprehensive real-world dataset of long-term building collapses.**
 
-**Coverage and validation**
+**The ratio optimization model is a surrogate.**
+The recommended ratios are derived by simulating combinations against the degradation curve. It acts as a fast surrogate for deterministic calculations, not as independent empirical evidence.
 
-- Well supported: coastal Tamil Nadu, which is where the framing and the fallback
-  data come from. Elsewhere the CMIP6 projections still work, but the historical
-  context and the calibration assumptions are less applicable.
-- **The Earth Engine query shape is not verified against the live API.** It was
-  written without credentials, so while the credential guard, response
-  normalisation, timeout handling and error mapping are all tested, the query
-  itself has only been exercised through a stand-in. Expect to iterate on it on
-  first contact with real Earth Engine access.
-- Only SSP2-4.5 is scored. That choice is deliberate — scoring everything against
-  SSP5-8.5 would declare almost every site uninsurable and destroy the tool's actual
-  purpose, which is comparing material choices — but a single scenario is still a
-  single scenario.
-
-**Product scope**
-
-- **No authentication.** v1 is anonymous, protected by per-IP rate limiting and
-  locked CORS. Anyone who can reach the API can create sites and scores.
-- **Rate limiting is per process.** State is in memory, so several backend replicas
-  each get their own budget. Redis is the upgrade path.
-- Behind a reverse proxy the deployment must set `X-Forwarded-For` and run uvicorn
-  with `--proxy-headers`, or every client resolves to the proxy's IP.
-- Only the exterior ring of a polygon is accepted; footprints with holes are not
-  supported.
-- The score models the building envelope. It does not model drainage, ground
-  conditions, neighbouring structures, maintenance, or occupancy.
-- **This is not an insurance decision, a survey, or engineering certification.**
+**Material properties and historical weather data.**
+The tool utilizes historical data from the past 10 years to determine environmental stress. While the past 10 years provide a solid baseline, they may not perfectly capture extreme once-in-a-century anomalies or future climate shifts.
 
 ---
 
-## 10. Project structure
+### Geographic Coverage and Validation
+
+**Best supported region: Areas with robust historical weather data.**
+The accuracy of the lifetime prediction relies heavily on the availability and resolution of the 10-year historical weather data (e.g., from IMD or Earth Engine). In regions with sparse data, the predictions will fall back on broader regional averages, which increases uncertainty.
+
+**The Earth Engine query has not been tested against live credentials.**
+The credential guard, response normalisation, timeout handling, and error mapping are all covered by unit tests — but the query shape itself has only been verified against a mock stand-in. **Expect to need one iteration when you first connect to a real Earth Engine account.**
+
+---
+
+### Product Scope
+
+**No user authentication.** Version 1 is anonymous, protected only by per-IP rate limiting and locked CORS headers. Anyone who can reach the API can create sites and generate predictions.
+
+**Rate limiting is per-process (in-memory only).** If multiple backend instances are running, each has its own independent rate limit budget. Redis would be the appropriate upgrade path for shared state across instances.
+
+**Only the exterior ring of a polygon is used.** Building footprints with interior holes (e.g., courtyards) are not supported — inner rings are silently ignored.
+
+**The prediction models the building envelope and core structure.** It does not account for drainage infrastructure, ground conditions (like soil subsidence), neighbouring structures, or building maintenance history.
+
+> ⚠️ **This tool is not a substitute for a professional structural survey, a geotechnical assessment, or formal engineering certification.**
+
+---
+
+## 10. Project Folder Structure
 
 ```
-backend/
-  app/
-    routes/          Thin HTTP handlers — parse, call one service, return
-    services/        All business logic: sites, climate_data, materials, scoring, reporting
-    repositories/    The only layer touching the database; ORM models live here
-      data/          Material catalogue seed data with sourced ratings
-    schemas/         Pydantic v2 models — the single source of truth for API shapes
-    core/            config · logging · constants · exceptions · calculations · rate limiting
-    external/        Typed clients: earth_engine, imd, gemini, shared http policy, prompts
-      data/          Bundled IMD fallback snapshot
-    ml/              Model registry (loaded once at startup) + inference wrappers
-    tests/           Mirrors app/ one-to-one; 316 tests
-  alembic.ini
-  pyproject.toml     Dependencies, ruff, black, mypy, pytest, coverage config
-
-frontend/
-  src/
-    components/ui/        Shared presentational components
-    components/map/       Leaflet + Leaflet.draw site selection
-    components/timeline/  2025–2055 slider and red-to-green damage chart
-    hooks/                Data fetching, loading and error state
-    lib/                  api-client · geo (coordinate order) · format
-    types/                api.generated.ts (from OpenAPI) + friendly aliases
-    test/                 Vitest setup and guards
-
-ml/
-  common.py                     Artifact naming, metrics, deterministic seeding
-  generate_synthetic_data.py    The synthetic dataset and every assumption in it
-  train_damage_calibration.py   Damage ratio regressor
-  train_material_ranker.py      Material recommendation surrogate
-  train_all.py                  Entry point behind `npm run train:models`
-  data/ models/                 Generated dataset and versioned .pkl artifacts
-
-db/migrations/     Alembic environment and versioned migrations
-scripts/           py.mjs (venv launcher) · generate-types.mjs · smoke_test.mjs
-docker-compose.yml Dev and disposable test PostGIS databases
-CLAUDE.md          Conventions and recorded architectural decisions
+gdg/
+│
+├── backend/
+│   └── app/
+│       ├── routes/          # Thin HTTP handlers — parse request, call one service, return response
+│       ├── services/        # All business logic: sites, weather data, materials, prediction, reporting
+│       ├── repositories/    # The ONLY layer allowed to touch the database; ORM models live here
+│       │   └── data/        # Material catalogue seed data with sourced ratings
+│       ├── schemas/         # Pydantic v2 models — single source of truth for API request/response shapes
+│       ├── core/            # Config, logging, constants, exceptions, calculations, rate limiting
+│       ├── external/        # Typed API clients: earth_engine, imd, gemini, shared HTTP policy, prompts
+│       │   └── data/        # Bundled IMD historical fallback snapshot (used when live API is unavailable)
+│       └── ml/              # Model registry (loaded once at startup) + inference wrapper functions
+│   ├── tests/               # Mirrors the app/ structure one-to-one; 316 tests total
+│   ├── alembic.ini          # Database migration tool configuration
+│   └── pyproject.toml       # Python dependencies, linting (ruff), formatting (black), mypy, pytest config
+│
+├── frontend/
+│   └── src/
+│       ├── components/ui/        # Shared presentational (display-only) React components
+│       ├── components/map/       # Leaflet map + Leaflet.draw for polygon site selection
+│       ├── components/timeline/  # Lifetime chart (Recharts)
+│       ├── hooks/                # React hooks for data fetching, loading states, and error handling
+│       ├── lib/                  # API client, geographic coordinate helpers, formatting utilities
+│       ├── types/                # api.generated.ts (auto-generated from OpenAPI schema) + friendly type aliases
+│       └── test/                 # Vitest test setup configuration and test guards
+│
+├── ml/
+│   ├── common.py                     # Shared utilities: artifact naming, metrics logging, deterministic seeding
+│   ├── generate_synthetic_data.py    # Generates synthetic training data — all assumptions documented here
+│   ├── train_lifetime_prediction.py  # Trains the building lifetime regression model
+│   ├── train_ratio_optimizer.py      # Trains the material ratio recommendation surrogate model
+│   ├── train_all.py                  # Entry point called by `npm run train:models`
+│   ├── data/                         # Generated synthetic dataset (produced by training scripts)
+│   └── models/                       # Versioned .pkl model artifacts + .json metrics sidecar files
+│
+├── db/
+│   └── migrations/    # Alembic migration environment and all versioned migration scripts
+│
+├── scripts/
+│   ├── py.mjs             # Cross-platform virtualenv Python launcher (used by all npm scripts)
+│   ├── generate-types.mjs # Generates TypeScript API types from the backend OpenAPI schema
+│   └── smoke_test.mjs     # End-to-end smoke test runner
+│
+├── docker-compose.yml  # Defines the dev database (port 5433) and test database (port 5434)
+├── CLAUDE.md           # Full architectural conventions and recorded design decisions
+└── .env.example        # Template for your local environment file — copy this to .env to get started
 ```
+
+---
+
+*Built to assist with modern, data-driven building construction and lifecycle planning.*

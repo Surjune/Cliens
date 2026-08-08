@@ -1,4 +1,4 @@
-# Secrets — never commit. See .env.example for the required keys.
+# Secrets â€” never commit. See .env.example for the required keys.
 .env
 .env.*
 !.env.example
@@ -33,7 +33,7 @@ coverage/
 # Generated from the backend OpenAPI spec by `npm run generate:types`.
 # Deliberately COMMITTED rather than ignored: generating it requires a running
 # backend, so ignoring it would leave a fresh clone unable to typecheck or build
-# the frontend. Never hand-edit it — regenerate instead.
+# the frontend. Never hand-edit it â€” regenerate instead.
 
 # OS / editor
 .DS_Store
@@ -45,7 +45,7 @@ Thumbs.db
 # ---------------------------------------------------------------------------
 # Large data artifacts
 #
-# The GRIB record is 129 MB — past GitHub's 100 MB hard limit — and everything
+# The GRIB record is 129 MB â€” past GitHub's 100 MB hard limit â€” and everything
 # below it is derived from it by `ml/grib_to_csv.py`, so a clone regenerates them.
 # What the application actually reads at run time is
 # `backend/app/repositories/data/district_climate_profiles.json`, which is small
@@ -54,3 +54,10 @@ Thumbs.db
 *.grib
 *.grib.*.idx
 ml/data/*.csv
+
+# ---------------------------------------------------------------------------
+# Carried over from the upstream repository's .gitignore on merge.
+# ---------------------------------------------------------------------------
+.env.local
+build/
+*.pyc
