@@ -1,7 +1,7 @@
 [project]
-name = "climate-lien-score-backend"
+name = "building-quality-score-backend"
 version = "0.1.0"
-description = "Climate Lien Score — scoring API for building-site climate risk."
+description = "Building Quality Score — IS 456 material compliance against measured climate."
 requires-python = ">=3.11"
 
 dependencies = [
@@ -25,7 +25,9 @@ dependencies = [
     # --- External clients --------------------------------------------------
     "httpx==0.28.1",
     "tenacity==9.0.0",           # retry policy for external calls
-    "earthengine-api==1.4.3",
+    # Composites the satellite tile and its place-name overlay into one image,
+    # because the globe renderer can only paint a single tile layer.
+    "pillow==12.3.0",
 
     # --- Observability -----------------------------------------------------
     "structlog==24.4.0",
@@ -37,6 +39,8 @@ dependencies = [
     "numpy==2.2.1",
     "pandas==2.2.3",
     "joblib==1.4.2",
+    # PDF generation for the downloadable client report.
+    "reportlab==5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -63,7 +67,6 @@ include = ["app*"]
 [tool.setuptools.package-data]
 # These data files must ship with the package, not merely exist in the source
 # tree, or an installed deployment loses its offline path and its seed data.
-"app.external" = ["data/*.json"]
 "app.repositories" = ["data/*.json"]
 
 # ---------------------------------------------------------------------------
@@ -123,16 +126,8 @@ exclude = ["/db/migrations/"]
 [[tool.mypy.overrides]]
 # These distributions ship no type information. Ignoring the missing stubs is
 # scoped to the import itself; our own wrappers around them remain fully typed.
-module = ["ee.*", "geoalchemy2.*", "sklearn.*", "joblib.*"]
+module = ["geoalchemy2.*", "sklearn.*", "joblib.*", "reportlab.*", "eccodes.*"]
 ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-# earthengine-api builds most of its public surface (ee.Image, ee.Filter, ...)
-# dynamically at import time, so mypy sees a module that exports almost nothing.
-# The attribute check is disabled for our Earth Engine wrapper only; every value
-# crossing back out of that module is still fully typed.
-module = ["app.external.earth_engine"]
-disable_error_code = ["attr-defined"]
 
 # ---------------------------------------------------------------------------
 # pytest

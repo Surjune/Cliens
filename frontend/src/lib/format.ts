@@ -1,73 +1,64 @@
 /**
  * Display formatting, defined once so the same quantity never appears two ways.
  */
-import { HORIZON_END_YEAR } from '@/types/api';
+import type { ScoreBand } from '@/types/api';
 
-const AREA_FORMAT = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
-
-/** Format a floor area with its unit. */
-export function formatArea(sqFt: number): string {
-  return `${AREA_FORMAT.format(sqFt)} sq ft`;
-}
-
-/**
- * Render a crossing year for display.
- *
- * `null` means the site never crosses the threshold within the horizon, which is
- * materially different from crossing in the final year and must never be
- * collapsed into it.
- */
-export function formatCrossingYear(year: number | null): string {
-  return year === null ? `Beyond ${String(HORIZON_END_YEAR)}` : String(year);
-}
-
-/** Render the uncertainty range around a crossing year. */
-export function formatYearRange(lower: number | null, upper: number | null): string {
-  if (lower === null && upper === null) {
-    return 'no crossing projected in range';
-  }
-  return `${formatCrossingYear(lower)} – ${formatCrossingYear(upper)}`;
-}
-
-/** Format a damage ratio as a percentage. */
-export function formatPercent(ratio: number): string {
-  return `${(ratio * 100).toFixed(0)}%`;
-}
-
-/** Human-readable label for a building component. */
-export function formatComponent(component: string): string {
-  return component.charAt(0).toUpperCase() + component.slice(1);
-}
-
-/**
- * Map a crossing year to a risk band, for the red-to-green transition.
- *
- * Bands are relative to the horizon: crossing soon is critical, surviving the
- * whole horizon is minimal.
- */
-export function riskBand(year: number | null): 'critical' | 'high' | 'moderate' | 'low' | 'minimal' {
-  if (year === null) {
-    return 'minimal';
-  }
-  if (year <= 2030) {
-    return 'critical';
-  }
-  if (year <= 2038) {
-    return 'high';
-  }
-  if (year <= 2046) {
-    return 'moderate';
-  }
-  return 'low';
-}
-
-/** Tailwind text colour class for a risk band. */
-export function riskTextClass(band: ReturnType<typeof riskBand>): string {
+/** Tailwind text colour for a score band. */
+export function bandTextClass(band: ScoreBand): string {
   return {
-    critical: 'text-risk-critical',
-    high: 'text-risk-high',
-    moderate: 'text-risk-moderate',
-    low: 'text-risk-low',
-    minimal: 'text-risk-minimal',
+    poor: 'text-band-poor',
+    marginal: 'text-band-marginal',
+    adequate: 'text-band-adequate',
+    good: 'text-band-good',
+    excellent: 'text-band-excellent',
   }[band];
+}
+
+/** Tailwind background colour for a score band. */
+export function bandFillClass(band: ScoreBand): string {
+  return {
+    poor: 'bg-band-poor',
+    marginal: 'bg-band-marginal',
+    adequate: 'bg-band-adequate',
+    good: 'bg-band-good',
+    excellent: 'bg-band-excellent',
+  }[band];
+}
+
+/** One-line plain-language verdict for a band, addressed to the user. */
+export function bandVerdict(band: ScoreBand): string {
+  return {
+    poor: 'Your specification falls well short of the code for this site.',
+    marginal: 'Your specification is below the code minimum in places.',
+    adequate: 'Your specification meets the code, with little margin.',
+    good: 'Your specification clears the code comfortably.',
+    excellent: 'Your specification is well ahead of the code minimum.',
+  }[band];
+}
+
+/** Format a 0-100 score for display. */
+export function formatScore(score: number): string {
+  return score.toFixed(0);
+}
+
+/** Format a signed score change. */
+export function formatDelta(delta: number): string {
+  return `${delta > 0 ? '+' : ''}${delta.toFixed(0)}`;
+}
+
+/** Format a fraction as a percentage. */
+export function formatPercent(fraction: number): string {
+  return `${(fraction * 100).toFixed(0)}%`;
+}
+
+/** Human-readable label for a compliance parameter. */
+export function formatParameter(parameter: string): string {
+  return (
+    {
+      concrete_grade_mpa: 'Concrete grade',
+      cement_content_kg_m3: 'Cement content',
+      water_cement_ratio: 'Water/cement ratio',
+      walling_climate_suitability: 'Walling material',
+    }[parameter] ?? parameter
+  );
 }

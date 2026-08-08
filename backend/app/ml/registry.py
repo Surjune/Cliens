@@ -27,8 +27,7 @@ logger = get_logger(__name__)
 REPO_ROOT = Path(__file__).resolve().parents[3]
 MODELS_DIR = REPO_ROOT / "ml" / "models"
 
-DAMAGE_MODEL_NAME = "damage_calibration"
-RANKER_MODEL_NAME = "material_ranker"
+QUALITY_MODEL_NAME = "quality_score"
 
 
 @dataclass(frozen=True)
@@ -114,15 +113,14 @@ def _load(model_name: str) -> LoadedModel:
 class ModelRegistry:
     """Holds every loaded model for the lifetime of the process."""
 
-    def __init__(self, damage: LoadedModel, ranker: LoadedModel) -> None:
+    def __init__(self, quality: LoadedModel) -> None:
         """Bind the registry to already-loaded artifacts."""
-        self.damage = damage
-        self.ranker = ranker
+        self.quality = quality
 
     @property
     def versions(self) -> dict[str, str]:
         """Artifact versions, recorded on every score for auditability."""
-        return {"damage_model": self.damage.version, "material_model": self.ranker.version}
+        return {"quality_model": self.quality.version}
 
 
 _registry: ModelRegistry | None = None
@@ -135,7 +133,7 @@ def load_registry() -> ModelRegistry:
         ModelUnavailableError: If any artifact is missing or unusable.
     """
     global _registry
-    _registry = ModelRegistry(damage=_load(DAMAGE_MODEL_NAME), ranker=_load(RANKER_MODEL_NAME))
+    _registry = ModelRegistry(quality=_load(QUALITY_MODEL_NAME))
     return _registry
 
 

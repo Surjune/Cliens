@@ -88,7 +88,11 @@ def configure_logging(settings: Settings) -> None:
     shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
+        # NOT structlog.stdlib.add_logger_name: that processor reads `logger.name`,
+        # which only exists on a stdlib logger. This app uses PrintLoggerFactory, so
+        # it would raise AttributeError on the first log call. `get_logger` binds the
+        # module name as `logger` instead, giving the same field without the
+        # stdlib dependency.
         _add_request_id,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
         structlog.processors.StackInfoRenderer(),
@@ -140,5 +144,9 @@ def get_logger(
         name: Logger name, conventionally the calling module's ``__name__``.
         initial_values: Fields bound to every event from this logger.
     """
-    logger: structlog.stdlib.BoundLogger = structlog.get_logger(name).bind(**initial_values)
+    # `logger=name` is bound explicitly here rather than added by a processor; see
+    # the note in configure_logging.
+    logger: structlog.stdlib.BoundLogger = structlog.get_logger(name).bind(
+        logger=name, **initial_values
+    )
     return logger

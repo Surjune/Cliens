@@ -4,6 +4,11 @@
 !.env.example
 *-service-account*.json
 credentials/
+# Google service-account keys are downloaded under their own project name, e.g.
+# `earth-504811-6cc61550fea6.json`, which the pattern above does not match. This
+# catches any file whose name is a GCP project id followed by a key fingerprint.
+[a-z]*-[0-9]*-[0-9a-f]*.json
+gcp-key*.json
 
 # Python
 __pycache__/
@@ -36,3 +41,16 @@ Thumbs.db
 .idea/
 .vscode/*
 !.vscode/settings.json
+
+# ---------------------------------------------------------------------------
+# Large data artifacts
+#
+# The GRIB record is 129 MB — past GitHub's 100 MB hard limit — and everything
+# below it is derived from it by `ml/grib_to_csv.py`, so a clone regenerates them.
+# What the application actually reads at run time is
+# `backend/app/repositories/data/district_climate_profiles.json`, which is small
+# and IS committed, so a fresh clone can score without the source file present.
+# ---------------------------------------------------------------------------
+*.grib
+*.grib.*.idx
+ml/data/*.csv

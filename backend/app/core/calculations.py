@@ -86,6 +86,49 @@ def precipitation_flux_to_mm_per_day(flux_kg_m2_s: float) -> float:
     return flux_kg_m2_s * constants.SECONDS_PER_DAY
 
 
+def relative_humidity_from_dewpoint(temperature_c: float, dewpoint_c: float) -> float:
+    """Derive relative humidity from air temperature and dewpoint.
+
+    ERA5 publishes 2 m temperature and 2 m dewpoint but not relative humidity, and
+    humidity is what drives the corrosion and durability rules in IS 456. This uses
+    the August-Roche-Magnus approximation with the Alduchov & Eskridge (1996)
+    coefficients, taking the ratio of saturation vapour pressure at the dewpoint to
+    that at the air temperature.
+
+    Args:
+        temperature_c: Air temperature in degrees Celsius.
+        dewpoint_c: Dewpoint temperature in degrees Celsius.
+
+    Returns:
+        Relative humidity as a percentage, clamped to ``[0, 100]``.
+
+    The clamp matters: dewpoint can exceed air temperature by a hair in reanalysis
+    output, which would otherwise yield a physically impossible value above 100%.
+    """
+    a = constants.MAGNUS_COEFFICIENT_A
+    b = constants.MAGNUS_COEFFICIENT_B_C
+    numerator = math.exp((a * dewpoint_c) / (b + dewpoint_c))
+    denominator = math.exp((a * temperature_c) / (b + temperature_c))
+    return clamp(100.0 * numerator / denominator, 0.0, 100.0)
+
+
+def metres_to_millimetres(depth_m: float) -> float:
+    """Convert a precipitation depth from metres to millimetres.
+
+    ERA5 reports total precipitation in metres; the internal unit is millimetres.
+    """
+    return depth_m * constants.MM_PER_METRE
+
+
+def wind_speed_from_components(eastward_ms: float, northward_ms: float) -> float:
+    """Combine u/v wind components into a scalar speed.
+
+    ERA5 gives wind as orthogonal components. Magnitude is what loading depends on;
+    direction is not used by the score.
+    """
+    return math.hypot(eastward_ms, northward_ms)
+
+
 def wet_bulb_temperature_c(temperature_c: float, relative_humidity_percent: float) -> float:
     """Estimate wet-bulb temperature from dry-bulb temperature and relative humidity.
 
@@ -427,6 +470,39 @@ def confidence_interval(point_estimate: float, standard_error: float) -> tuple[f
         constants.MAX_CONFIDENCE_INTERVAL_WIDTH / 2.0,
     )
     return point_estimate - half_width, point_estimate + half_width
+
+
+# ---------------------------------------------------------------------------
+# Geodesy
+# ---------------------------------------------------------------------------
+def haversine_km(
+    latitude_a: float,
+    longitude_a: float,
+    latitude_b: float,
+    longitude_b: float,
+) -> float:
+    """Great-circle distance between two WGS84 points, in kilometres.
+
+    Spherical rather than ellipsoidal. The error against WGS84 is under 0.5%, which
+    at the distances this is used for — a pin against a grid node tens of
+    kilometres away — is far below the 27 km cell it is being compared to.
+
+    A planar approximation is deliberately not used: it degrades with latitude and
+    fails outright across the antimeridian, and this runs on pins the user may drop
+    anywhere on the globe, not only inside the observed region.
+    """
+    lat_a_rad = math.radians(latitude_a)
+    lat_b_rad = math.radians(latitude_b)
+    delta_lat = math.radians(latitude_b - latitude_a)
+    delta_lon = math.radians(longitude_b - longitude_a)
+
+    inner = (
+        math.sin(delta_lat / 2.0) ** 2
+        + math.cos(lat_a_rad) * math.cos(lat_b_rad) * math.sin(delta_lon / 2.0) ** 2
+    )
+    # clamp guards against a floating-point result marginally above 1.0 for
+    # coincident points, which would make asin raise.
+    return 2.0 * constants.EARTH_MEAN_RADIUS_KM * math.asin(math.sqrt(clamp(inner, 0.0, 1.0)))
 
 
 # ---------------------------------------------------------------------------

@@ -43,7 +43,7 @@ class TestReadiness:
         assert by_name["material_catalogue"]["ready"] is True
         assert by_name["ml_models"]["ready"] is True
         # Model versions are reported so a score can be tied to its artifacts.
-        assert "damage_model=" in by_name["ml_models"]["detail"]
+        assert "quality_model=" in by_name["ml_models"]["detail"]
         # The schema depends on PostGIS, so the version is reported for diagnosis.
         assert "PostGIS" in by_name["postgis"]["detail"]
 
@@ -150,5 +150,5 @@ class TestOpenApiSpec:
         assert response.status_code == 200
 
         spec = response.json()
-        assert spec["info"]["title"] == "Climate Lien Score API"
+        assert spec["info"]["title"] == "Building Quality Score API"
         assert "/api/health/live" in spec["paths"]

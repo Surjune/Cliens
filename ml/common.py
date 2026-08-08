@@ -88,7 +88,9 @@ def artifact_name(model_name: str) -> str:
     return f"{model_name}_{stamp}_{git_commit_sha()}.pkl"
 
 
-def evaluate(predicted: np.ndarray, actual: np.ndarray, *, units: str, n_train: int) -> ModelMetrics:
+def evaluate(
+    predicted: np.ndarray, actual: np.ndarray, *, units: str, n_train: int
+) -> ModelMetrics:
     """Compute held-out metrics."""
     return ModelMetrics(
         r2=float(r2_score(actual, predicted)),
@@ -99,7 +101,9 @@ def evaluate(predicted: np.ndarray, actual: np.ndarray, *, units: str, n_train: 
     )
 
 
-def write_metrics_report(model_name: str, artifact: Path, metrics: ModelMetrics, extra: dict[str, Any]) -> Path:
+def write_metrics_report(
+    model_name: str, artifact: Path, metrics: ModelMetrics, extra: dict[str, Any]
+) -> Path:
     """Write a JSON sidecar describing how this artifact was produced.
 
     The README quotes these numbers, so they are recorded rather than transcribed

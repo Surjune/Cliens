@@ -58,6 +58,12 @@ class Settings(BaseSettings):
     rate_limit_requests: Annotated[int, Field(ge=1, le=10_000)] = 60
     rate_limit_window_seconds: Annotated[int, Field(ge=1, le=3_600)] = 60
 
+    # --- Basemap imagery ---------------------------------------------------
+    # Optional. Without it the map falls back to Esri, which publishes no imagery
+    # deeper than zoom 19 (~0.3 m per pixel). Mapbox Satellite reaches zoom 22 in
+    # populated areas, which is what resolves individual roof detail.
+    mapbox_access_token: str | None = None
+
     # --- Gemini ------------------------------------------------------------
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.0-flash"
@@ -95,6 +101,17 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def mapbox_configured(self) -> bool:
+        """Whether the deeper Mapbox imagery is available.
+
+        Read at request time rather than baked into a constant: the maximum usable
+        zoom depends on it, and the interface has to report the real limit rather
+        than let the user zoom into blank tiles.
+        """
+        return bool(self.mapbox_access_token)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def gemini_configured(self) -> bool:
         """Whether report generation can run."""
         return bool(self.gemini_api_key)
@@ -123,6 +140,7 @@ class Settings(BaseSettings):
     # Validation
     # ----------------------------------------------------------------------
     @field_validator(
+        "mapbox_access_token",
         "gemini_api_key",
         "earth_engine_project_id",
         "earth_engine_service_account_email",

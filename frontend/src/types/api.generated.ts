@@ -50,72 +50,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/sites": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Submit a building site
-         * @description Store a site boundary and return it with its computed area and centroid.
-         *
-         *     The area is computed by PostGIS from the submitted geometry; any area the
-         *     client calculated for display is not accepted or trusted.
-         */
-        post: operations["create_site_api_sites_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/sites/{site_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Fetch a stored site
-         * @description Return a previously submitted site.
-         */
-        get: operations["get_site_api_sites__site_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/climate/profile": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Climate risk profile for a location
-         * @description Return CMIP6 projections and IMD historical context for a point.
-         *
-         *     Responses are cached against the rounded coordinates and the horizon, so a
-         *     repeat request replays the same upstream data rather than re-querying it.
-         */
-        get: operations["get_climate_profile_api_climate_profile_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/materials": {
         parameters: {
             query?: never;
@@ -162,6 +96,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/score/districts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Districts with a measured climate profile
+         * @description List the districts that can be scored, with where each one sits.
+         *
+         *     Coordinates are included so a map or globe can place markers and resolve a
+         *     dropped pin to a supported district. ``grid_resolution_km`` is returned with
+         *     them deliberately: a picker must not offer finer precision than the climate
+         *     grid actually has, or it implies a per-building reading that does not exist.
+         */
+        get: operations["list_districts_api_score_districts_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/score/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Resolve a dropped pin to the grid cell that will be scored
+         * @description Turn map coordinates into the district whose reading applies there.
+         *
+         *     Separate from ``POST /score`` on purpose. A globe needs an answer as the pin
+         *     moves, long before there is a specification to score, and keeping the lookup
+         *     here leaves ``/score`` a pure function of a named district.
+         */
+        post: operations["resolve_pin_api_score_resolve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/score": {
         parameters: {
             query?: never;
@@ -172,11 +155,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Compute the Climate Lien Score for a site
-         * @description Score a site with the submitted materials.
+         * Score a district's materials, and the recommendation alongside
+         * @description Return the proposed and recommended specifications, both scored.
          *
-         *     Deterministic: identical inputs return the identical stored score, including
-         *     the model versions that produced it.
+         *     Supplying ``materials`` evaluates them. Omitting it returns the recommendation
+         *     against a conventional baseline, so a before/after always exists.
          */
         post: operations["create_score_api_score_post"];
         delete?: never;
@@ -185,7 +168,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/score/prove": {
+    "/api/score/area": {
         parameters: {
             query?: never;
             header?: never;
@@ -195,13 +178,15 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Score, recommend better materials, and re-score with them applied
-         * @description Return the baseline and improved scores side by side.
+         * Score a drawn site boundary
+         * @description Score an area drawn on the map rather than a named district.
          *
-         *     Both are computed by the same engine from the same cached climate profile, so
-         *     the two crossing years are directly comparable.
+         *     The reply is the same shape as ``POST /score`` with one addition:
+         *     ``climate_provenance`` says whether the climate was measured inside the drawn
+         *     area or interpolated from surrounding cells. That field is the interface's only
+         *     way to distinguish the two, so it is always populated here.
          */
-        post: operations["prove_api_score_prove_post"];
+        post: operations["create_area_score_api_score_area_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -218,14 +203,88 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Generate a plain-English report for a score
-         * @description Turn a score breakdown into readable prose.
+         * Download the client report as a PDF
+         * @description Score the district and return the result as a downloadable PDF.
          *
-         *     The model receives only the computed breakdown and is instructed not to
-         *     introduce any figure absent from it. Repeat requests return the stored report
-         *     rather than regenerating it.
+         *     Takes the same body as ``POST /score`` and re-scores rather than reading a
+         *     stored result. Scoring is deterministic and inexpensive, so this avoids
+         *     persisting anything and guarantees the document matches the current engine
+         *     rather than a stale row.
          */
-        post: operations["create_report_api_reports_post"];
+        post: operations["download_report_api_reports_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/tiles/{z}/{x}/{y}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * One satellite map tile with place names composited onto it
+         * @description Serve one composited map tile.
+         *
+         *     The path type bounds ``z`` to the deepest level any provider reaches; the
+         *     actual limit depends on which providers are configured, so it is checked here.
+         *     Serving beyond it would return blank tiles that look like missing ground.
+         */
+        get: operations["get_tile_api_tiles__z___x___y__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/basemap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What the map can actually do with the imagery configured
+         * @description Report the real zoom ceiling and the attribution that must be shown.
+         *
+         *     The client cannot hardcode either. Both change with which providers are
+         *     configured, and a client that assumed the deeper limit would let the user zoom
+         *     into blank tiles while crediting the wrong source.
+         */
+        get: operations["get_basemap_capabilities_api_basemap_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/geocode": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Find a place, address or postcode
+         * @description Look up somewhere by name, address or postcode.
+         *
+         *     Returns matches anywhere on Earth, deliberately. Whether a place has measured
+         *     climate is a separate question, answered when an area is actually scored — a
+         *     search that silently hid everywhere unscoreable would leave the user unable to
+         *     navigate their own map.
+         */
+        get: operations["search_places_api_geocode_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -237,93 +296,192 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
-         * Centroid
-         * @description A point location in WGS84.
+         * AreaBoundsInput
+         * @description A site boundary drawn on the map.
+         *
+         *     Ordering is validated rather than silently corrected: a reversed rectangle means
+         *     the client computed it wrongly, and quietly swapping the corners would hide that
+         *     bug behind a plausible-looking score.
          */
-        Centroid: {
+        AreaBoundsInput: {
             /**
-             * Longitude
-             * @description WGS84 longitude
+             * South
+             * @description WGS84 latitude.
              */
-            longitude: number;
+            south: number;
             /**
-             * Latitude
-             * @description WGS84 latitude
+             * North
+             * @description WGS84 latitude.
              */
-            latitude: number;
+            north: number;
+            /**
+             * West
+             * @description WGS84 longitude.
+             */
+            west: number;
+            /**
+             * East
+             * @description WGS84 longitude.
+             */
+            east: number;
         };
         /**
-         * ClimateProfile
-         * @description The full climate risk picture for one site across the scoring horizon.
+         * AreaScoreRequest
+         * @description Score a drawn area rather than a named district.
          */
-        ClimateProfile: {
-            centroid: components["schemas"]["Centroid"];
+        AreaScoreRequest: {
+            area: components["schemas"]["AreaBoundsInput"];
+            materials?: components["schemas"]["MaterialSelectionInput"] | null;
             /**
-             * Projections
-             * @description One entry per year from 2025 to 2055, ascending.
-             */
-            projections: components["schemas"]["YearlyHazardProjection"][];
-            /** @description Observed local history, or null where IMD has no coverage. */
-            historical: components["schemas"]["HistoricalContext"] | null;
-            /**
-             * Provenance
-             * @description Provenance for every upstream contributing to this profile.
-             */
-            provenance: components["schemas"]["DataProvenance"][];
-        };
-        /**
-         * ComponentBreakdown
-         * @description One component's contribution to total structural stress.
-         */
-        ComponentBreakdown: {
-            /**
-             * Component
+             * Element Situation
+             * @default exposed
              * @enum {string}
              */
-            component: "foundation" | "walls" | "roofing";
-            /** Material Code */
-            material_code: string;
-            /** Material Name */
-            material_name: string;
-            /**
-             * Total
-             * @description Total stress reaching this component.
-             */
-            total: number;
-            /** By Hazard */
-            by_hazard: components["schemas"]["HazardContribution"][];
+            element_situation: "enclosed" | "sheltered" | "exposed" | "buried" | "tidal";
         };
         /**
-         * DataProvenance
-         * @description Where one part of a profile came from.
+         * BasemapCapabilities
+         * @description What the map can do with the imagery currently configured.
          */
-        DataProvenance: {
+        BasemapCapabilities: {
             /**
-             * Service
-             * @enum {string}
+             * Max Zoom
+             * @description Deepest zoom that returns real photography. The client must not offer more, or the user zooms into blank tiles that read as missing ground.
              */
-            service: "earth_engine" | "imd" | "gemini";
+            max_zoom: number;
             /**
-             * Dataset
-             * @description Dataset or endpoint identifier within that service.
+             * Deep Imagery Available
+             * @description Whether a metered high-resolution provider is configured.
              */
-            dataset: string;
+            deep_imagery_available: boolean;
             /**
-             * Retrieved At
-             * Format: date-time
-             * @description When the upstream was last actually called.
+             * Attribution
+             * @description Credit line the map must display for the active providers.
              */
-            retrieved_at: string;
+            attribution: string;
+        };
+        /**
+         * ClimateProfileResponse
+         * @description The measured climate a score was based on.
+         */
+        ClimateProfileResponse: {
+            /** District */
+            district: string;
+            /** Distance To Coast Km */
+            distance_to_coast_km: number;
+            /** Mean Relative Humidity Percent */
+            mean_relative_humidity_percent: number;
+            /** Mean Max Temperature C */
+            mean_max_temperature_c: number;
+            /** Max Wind Gust Ms */
+            max_wind_gust_ms: number;
             /**
-             * Served From Cache
-             * @description True when replayed from the durable cache. Re-scoring reuses the cached response so a score cannot drift because an upstream changed.
+             * Wet Hours Fraction
+             * @description Fraction of sampled hours with rainfall. Used instead of an annual depth because the source accumulates over one hour per day.
              */
-            served_from_cache: boolean;
+            wet_hours_fraction: number;
+            /** Wet Dry Cycles Per Year */
+            wet_dry_cycles_per_year: number;
+            /** Observation Days */
+            observation_days: number;
+        };
+        /**
+         * ClimateProvenanceResponse
+         * @description How the climate behind a score was arrived at.
+         *
+         *     Present only for area scoring, and always present there. An interpolated value
+         *     must never be presentable as a measured one, so the flag travels with the score
+         *     rather than being something the interface can forget to ask for.
+         */
+        ClimateProvenanceResponse: {
             /**
-             * Notes
-             * @description Caveats a reader needs, such as known coverage gaps.
+             * Interpolated
+             * @description True when no measured grid node fell inside the drawn area and the climate was inverse-distance weighted from surrounding nodes.
              */
-            notes?: string | null;
+            interpolated: boolean;
+            /**
+             * Enclosed Node Count
+             * @description Measured grid nodes that fell inside the drawn area.
+             */
+            enclosed_node_count: number;
+            /**
+             * Source Districts
+             * @description The measured cells the value was built from.
+             */
+            source_districts: string[];
+            /**
+             * Nearest Source Km
+             * @description Distance from the area's centre to the nearest contributing cell.
+             */
+            nearest_source_km: number;
+        };
+        /**
+         * ComplianceFindingResponse
+         * @description One requirement checked against one proposed value.
+         */
+        ComplianceFindingResponse: {
+            /** Parameter */
+            parameter: string;
+            /** Label */
+            label: string;
+            /** Required */
+            required: number;
+            /** Provided */
+            provided: number;
+            /** Compliant */
+            compliant: boolean;
+            /**
+             * Margin Ratio
+             * @description Signed fractional margin: positive exceeds the requirement.
+             */
+            margin_ratio: number;
+            /** Standard */
+            standard: string;
+            /** Message */
+            message: string;
+        };
+        /**
+         * ConcreteMixInput
+         * @description A proposed concrete specification.
+         */
+        ConcreteMixInput: {
+            /**
+             * Grade
+             * @description Concrete grade, e.g. 'M30'.
+             */
+            grade: string;
+            /** Cement Content Kg M3 */
+            cement_content_kg_m3: number;
+            /** Water Cement Ratio */
+            water_cement_ratio: number;
+            /**
+             * Cement Type
+             * @default OPC
+             */
+            cement_type: string;
+            /**
+             * Admixtures
+             * @default []
+             */
+            admixtures: string[];
+        };
+        /**
+         * CoverageBounds
+         * @description The rectangle the observed climate record actually covers.
+         *
+         *     Published so a globe can draw the supported region rather than letting the user
+         *     discover it by being refused. Derived from the loaded profiles, never hardcoded,
+         *     so it cannot drift from the data.
+         */
+        CoverageBounds: {
+            /** South */
+            south: number;
+            /** North */
+            north: number;
+            /** West */
+            west: number;
+            /** East */
+            east: number;
         };
         /**
          * DependencyStatus
@@ -345,6 +503,60 @@ export interface components {
              * @description Version, or the reason it is not ready. Never contains credentials.
              */
             detail?: string | null;
+        };
+        /**
+         * DistrictListResponse
+         * @description Districts that have a measured climate profile.
+         */
+        DistrictListResponse: {
+            /** Districts */
+            districts: string[];
+            /**
+             * Locations
+             * @description Coordinates for each supported district, for placing map markers.
+             */
+            locations: components["schemas"]["DistrictLocation"][];
+            /**
+             * Grid Resolution Km
+             * @description Width of one climate grid cell. A picker must not imply finer precision than this, because every point inside one cell shares a single reading.
+             */
+            grid_resolution_km: number;
+            /** @description The region a dropped pin can be scored inside. */
+            coverage: components["schemas"]["CoverageBounds"];
+            /**
+             * Max Pin Distance Km
+             * @description How far a pin may sit from a grid node and still resolve. Beyond this the request is refused rather than answered from a distant node.
+             */
+            max_pin_distance_km: number;
+            /** Observation Start */
+            observation_start: string;
+            /** Observation End */
+            observation_end: string;
+            /** Source */
+            source: string;
+        };
+        /**
+         * DistrictLocation
+         * @description Where a supported district's climate is actually measured.
+         *
+         *     These are the coordinates of the climate grid CELL, not of the district
+         *     headquarters. That is deliberate: the cell is where the reading comes from, so
+         *     a marker placed here sits on the data rather than on a town that merely falls
+         *     inside it. Several districts legitimately share one cell.
+         */
+        DistrictLocation: {
+            /** Name */
+            name: string;
+            /**
+             * Grid Latitude
+             * @description Latitude of the climate grid cell, WGS84.
+             */
+            grid_latitude: number;
+            /**
+             * Grid Longitude
+             * @description Longitude of the climate grid cell, WGS84.
+             */
+            grid_longitude: number;
         };
         /**
          * ErrorDetail
@@ -383,20 +595,37 @@ export interface components {
             error: components["schemas"]["ErrorDetail"];
         };
         /**
-         * HazardContribution
-         * @description How much one hazard contributed to a component's stress.
+         * GeocodeMatch
+         * @description One place matched by a search.
+         *
+         *     The bounding box is optional because the geocoder does not always supply one —
+         *     a street address is a point, not an area. A client should fly to the box when it
+         *     exists and fall back to the point when it does not, rather than inventing a box
+         *     around the point and implying an extent the geocoder never claimed.
          */
-        HazardContribution: {
-            /**
-             * Hazard
-             * @enum {string}
-             */
-            hazard: "wind" | "flood" | "heat";
-            /**
-             * Contribution
-             * @description Weighted stress this hazard placed on this component.
-             */
-            contribution: number;
+        GeocodeMatch: {
+            /** Label */
+            label: string;
+            /** Latitude */
+            latitude: number;
+            /** Longitude */
+            longitude: number;
+            /** South */
+            south?: number | null;
+            /** North */
+            north?: number | null;
+            /** West */
+            west?: number | null;
+            /** East */
+            east?: number | null;
+        };
+        /**
+         * GeocodeResponse
+         * @description Matches for a place search, best first.
+         */
+        GeocodeResponse: {
+            /** Matches */
+            matches: components["schemas"]["GeocodeMatch"][];
         };
         /**
          * HazardResistance
@@ -418,50 +647,6 @@ export interface components {
              * @description Share of heat loading resisted.
              */
             heat: number;
-        };
-        /**
-         * HistoricalContext
-         * @description Observed cyclone and rainfall history for the district containing the site.
-         *
-         *     Grounds the projection in what has already happened locally. Optional: IMD
-         *     coverage is uneven, and an absent record is reported as absent rather than
-         *     filled in with a plausible-looking number.
-         */
-        HistoricalContext: {
-            /**
-             * District
-             * @description District the site falls in, as IMD names it.
-             */
-            district: string | null;
-            /**
-             * State
-             * @description State or union territory.
-             */
-            state: string | null;
-            /**
-             * Cyclone Events Recorded
-             * @description Cyclonic storms or stronger recorded over the record period.
-             */
-            cyclone_events_recorded: number;
-            /**
-             * Strongest Recorded Wind Ms
-             * @description Strongest sustained wind on record, metres per second.
-             */
-            strongest_recorded_wind_ms: number;
-            /**
-             * Strongest Recorded Category
-             * @description IMD category corresponding to the strongest recorded wind.
-             */
-            strongest_recorded_category: string;
-            /**
-             * Wettest Recorded Day Mm
-             * @description Highest single-day rainfall on record, millimetres.
-             */
-            wettest_recorded_day_mm: number;
-            /** Record Period Start Year */
-            record_period_start_year: number;
-            /** Record Period End Year */
-            record_period_end_year: number;
         };
         /**
          * LivenessResponse
@@ -486,40 +671,6 @@ export interface components {
             walls: components["schemas"]["MaterialResponse"][];
             /** Roofing */
             roofing: components["schemas"]["MaterialResponse"][];
-        };
-        /**
-         * MaterialRecommendation
-         * @description A suggested replacement for one component.
-         */
-        MaterialRecommendation: {
-            /**
-             * Component
-             * @enum {string}
-             */
-            component: "foundation" | "walls" | "roofing";
-            /** Current Code */
-            current_code: string;
-            /** Current Name */
-            current_name: string;
-            /** Recommended Code */
-            recommended_code: string;
-            /** Recommended Name */
-            recommended_name: string;
-            /**
-             * Predicted Damage Reduction
-             * @description Damage ratio removed by this change, per the ranking model.
-             */
-            predicted_damage_reduction: number;
-            /**
-             * Relative Cost Index
-             * @description Cost of the recommendation relative to the conventional option.
-             */
-            relative_cost_index: number;
-            /**
-             * Rationale
-             * @description Why this material was suggested for this site.
-             */
-            rationale: string;
         };
         /**
          * MaterialResponse
@@ -584,46 +735,56 @@ export interface components {
             roofing: string;
         };
         /**
-         * PolygonGeometry
-         * @description A GeoJSON Polygon restricted to what a building site can legitimately be.
-         *
-         *     Only the exterior ring is accepted: a building footprint with a hole is not a
-         *     meaningful site for this product, and supporting holes would complicate the
-         *     area calculation without a use case.
+         * MaterialSelectionInput
+         * @description What the user proposes to build with.
          */
-        PolygonGeometry: {
+        MaterialSelectionInput: {
+            concrete: components["schemas"]["ConcreteMixInput"];
+            /** Walling Material Id */
+            walling_material_id: string;
             /**
-             * Type
-             * @default Polygon
-             * @constant
+             * Element Situation
+             * @default exposed
+             * @enum {string}
              */
-            type: "Polygon";
-            /**
-             * Coordinates
-             * @description Exactly one linear ring: the exterior boundary, in [lon, lat] order.
-             */
-            coordinates: [
-                number,
-                number
-            ][][];
+            element_situation: "enclosed" | "sheltered" | "exposed" | "buried" | "tidal";
         };
         /**
-         * ProveResponse
-         * @description Baseline and improved scores side by side, with what changed.
-         *
-         *     Both are computed by the same engine from the same climate profile, so the two
-         *     years are directly comparable — which is the entire point of the prove step.
+         * PinRequest
+         * @description A point dropped on a map or globe.
          */
-        ProveResponse: {
-            baseline: components["schemas"]["ScoreResponse"];
-            improved: components["schemas"]["ScoreResponse"];
-            /** Recommendations */
-            recommendations: components["schemas"]["MaterialRecommendation"][];
+        PinRequest: {
             /**
-             * Years Gained
-             * @description How many years later the improved build crosses the threshold. Null when either scenario never crosses within the horizon, since the difference would be unbounded.
+             * Latitude
+             * @description WGS84 latitude.
              */
-            years_gained: number | null;
+            latitude: number;
+            /**
+             * Longitude
+             * @description WGS84 longitude.
+             */
+            longitude: number;
+        };
+        /**
+         * PinResolutionResponse
+         * @description Which grid cell a dropped pin falls in.
+         *
+         *     ``distance_km`` is returned so the interface can be honest about what was
+         *     actually resolved: a pin 20 km from the node is answered by that node's reading,
+         *     not by a reading taken where the user clicked.
+         */
+        PinResolutionResponse: {
+            /** District */
+            district: string;
+            /** Grid Latitude */
+            grid_latitude: number;
+            /** Grid Longitude */
+            grid_longitude: number;
+            /**
+             * Distance Km
+             * @description Great-circle distance from the pin to the grid node it resolved to.
+             */
+            distance_km: number;
         };
         /**
          * ReadinessResponse
@@ -639,55 +800,25 @@ export interface components {
             dependencies: components["schemas"]["DependencyStatus"][];
         };
         /**
-         * ReportRequest
-         * @description Request a plain-English report for a computed score.
+         * RecommendationResponse
+         * @description An applicable reference-table recommendation.
          */
-        ReportRequest: {
-            /**
-             * Score Id
-             * Format: uuid
-             * @description Identifier of the score to explain.
-             */
-            score_id: string;
-        };
-        /**
-         * ReportResponse
-         * @description A generated report.
-         *
-         *     ``prompt_version`` and ``model_name`` are always returned so a report can be
-         *     traced to the exact instructions and model that produced it.
-         */
-        ReportResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
+        RecommendationResponse: {
+            /** Id */
             id: string;
+            /** Condition Label */
+            condition_label: string;
+            /** Material */
+            material: string;
+            /** Purpose */
+            purpose: string;
+            /** Standard */
+            standard: string;
             /**
-             * Score Id
-             * Format: uuid
+             * Followed
+             * @description Whether the selection already satisfies this.
              */
-            score_id: string;
-            /**
-             * Content
-             * @description The report text, in Markdown.
-             */
-            content: string;
-            /**
-             * Prompt Version
-             * @description Version of the version-controlled prompt used.
-             */
-            prompt_version: string;
-            /**
-             * Model Name
-             * @description Gemini model that generated the text.
-             */
-            model_name: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
+            followed: boolean;
         };
         /**
          * ResolvedMaterial
@@ -711,239 +842,86 @@ export interface components {
             relative_cost_index: number;
         };
         /**
-         * ScoreBreakdown
-         * @description Everything needed to audit a score.
-         */
-        ScoreBreakdown: {
-            /**
-             * Uninsurable Damage Threshold
-             * @description The damage ratio at which a site is treated as uninsurable.
-             */
-            uninsurable_damage_threshold: number;
-            /**
-             * Area Sq Ft
-             * @description Footprint used, computed by PostGIS from the polygon.
-             */
-            area_sq_ft: number;
-            /**
-             * Area Exposure Factor
-             * @description Multiplier applied to stress for footprint.
-             */
-            area_exposure_factor: number;
-            /** Materials */
-            materials: components["schemas"]["ResolvedMaterial"][];
-            /**
-             * Components
-             * @description Stress decomposition at the first crossing year, or the final year.
-             */
-            components: components["schemas"]["ComponentBreakdown"][];
-            /**
-             * Years
-             * @description One entry per year, ascending.
-             */
-            years: components["schemas"]["YearBreakdown"][];
-        };
-        /**
          * ScoreRequest
-         * @description Request a Climate Lien Score for a stored site.
+         * @description Score a district.
+         *
+         *     ``materials`` is optional: omitting it is recommend-only mode, and the reply
+         *     then compares the recommendation against a conventional baseline so the
+         *     "before" side is still meaningful.
          */
         ScoreRequest: {
+            /** District */
+            district: string;
+            materials?: components["schemas"]["MaterialSelectionInput"] | null;
             /**
-             * Site Id
-             * Format: uuid
-             * @description Identifier returned when the site was created.
+             * Element Situation
+             * @default exposed
+             * @enum {string}
              */
-            site_id: string;
-            /** @description One material per building component. */
-            materials: components["schemas"]["MaterialSelection"];
+            element_situation: "enclosed" | "sheltered" | "exposed" | "buried" | "tidal";
         };
         /**
          * ScoreResponse
-         * @description A Climate Lien Score with its full provenance.
-         *
-         *     ``crossing_year`` is null when the site never crosses the threshold within the
-         *     horizon. That is materially different from crossing in 2055 and clients must
-         *     present it differently.
+         * @description Before and after, with the reasoning behind both.
          */
         ScoreResponse: {
+            /** District */
+            district: string;
+            climate: components["schemas"]["ClimateProfileResponse"];
+            /** Exposure Class */
+            exposure_class: string;
+            /** Exposure Label */
+            exposure_label: string;
+            /** Exposure Reasons */
+            exposure_reasons: string[];
+            proposed: components["schemas"]["ScoredSelectionResponse"];
+            recommended: components["schemas"]["ScoredSelectionResponse"];
             /**
-             * Id
-             * Format: uuid
+             * Improvement
+             * @description Points the recommendation adds.
              */
-            id: string;
+            improvement: number;
+            /** Recommendations */
+            recommendations: components["schemas"]["RecommendationResponse"][];
+            /** Model Version */
+            model_version: string;
             /**
-             * Site Id
-             * Format: uuid
+             * Data Source
+             * @description Provenance of the climate data behind this score.
              */
-            site_id: string;
+            data_source: {
+                [key: string]: string;
+            };
+            /** @description How the climate was derived. Null for a named district, whose reading is measured directly. Always populated for a drawn area. */
+            climate_provenance?: components["schemas"]["ClimateProvenanceResponse"] | null;
+        };
+        /**
+         * ScoredSelectionResponse
+         * @description One specification, scored and explained.
+         */
+        ScoredSelectionResponse: {
+            concrete: components["schemas"]["ConcreteMixInput"];
+            /** Walling Material Id */
+            walling_material_id: string;
             /**
-             * Scenario
+             * Score
+             * @description Headline 0-100 score, from the model.
+             */
+            score: number;
+            /**
+             * Rules Score
+             * @description The same score computed directly by the rules engine.
+             */
+            rules_score: number;
+            /**
+             * Band
              * @enum {string}
              */
-            scenario: "baseline" | "improved";
-            /**
-             * Crossing Year
-             * @description First year the site becomes uninsurable, or null if never within the horizon.
-             */
-            crossing_year: number | null;
-            /**
-             * Crossing Year Lower
-             * @description Earliest plausible crossing year at the 95% level.
-             */
-            crossing_year_lower: number | null;
-            /**
-             * Crossing Year Upper
-             * @description Latest plausible crossing year at the 95% level.
-             */
-            crossing_year_upper: number | null;
-            /**
-             * Confidence
-             * @enum {string}
-             */
-            confidence: "high" | "moderate" | "low";
-            breakdown: components["schemas"]["ScoreBreakdown"];
-            /** Damage Model Version */
-            damage_model_version: string;
-            /** Material Model Version */
-            material_model_version: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /**
-         * SiteCreateRequest
-         * @description A building site submitted from the map.
-         */
-        SiteCreateRequest: {
-            /** @description GeoJSON Polygon of the site boundary, WGS84, [lon, lat] order. */
-            geometry: components["schemas"]["PolygonGeometry"];
-            /**
-             * Label
-             * @description Optional name for this site, shown in the UI.
-             */
-            label?: string | null;
-        };
-        /**
-         * SiteResponse
-         * @description A stored building site.
-         *
-         *     ``area_sq_ft`` and ``centroid`` are both computed by PostGIS from the geometry,
-         *     never supplied by the client.
-         */
-        SiteResponse: {
-            /**
-             * Id
-             * Format: uuid
-             */
-            id: string;
-            geometry: components["schemas"]["PolygonGeometry"];
-            /**
-             * Area Sq Ft
-             * @description Footprint area computed from the geometry by PostGIS, in square feet.
-             */
-            area_sq_ft: number;
-            /** @description Geometric centre of the polygon; the point used for climate lookups. */
-            centroid: components["schemas"]["Centroid"];
-            /** Label */
-            label: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-        };
-        /**
-         * YearBreakdown
-         * @description The full picture for one year of the horizon.
-         */
-        YearBreakdown: {
-            /** Year */
-            year: number;
-            /** Peak Wind Speed Ms */
-            peak_wind_speed_ms: number;
-            /** Max Daily Rainfall Mm */
-            max_daily_rainfall_mm: number;
-            /** Max Temperature C */
-            max_temperature_c: number;
-            /** Max Wet Bulb Temperature C */
-            max_wet_bulb_temperature_c: number;
-            /**
-             * Intensity Wind
-             * @description Wind intensity, normalised to design load.
-             */
-            intensity_wind: number;
-            /**
-             * Intensity Flood
-             * @description Flood intensity, normalised.
-             */
-            intensity_flood: number;
-            /**
-             * Intensity Heat
-             * @description Heat intensity, normalised.
-             */
-            intensity_heat: number;
-            /**
-             * Stress Total
-             * @description Resistance-weighted stress for this year.
-             */
-            stress_total: number;
-            /**
-             * Damage Ratio
-             * @description Predicted damage ratio.
-             */
-            damage_ratio: number;
-            /**
-             * Damage Ratio Lower
-             * @description Lower bound of the 95% interval.
-             */
-            damage_ratio_lower: number;
-            /**
-             * Damage Ratio Upper
-             * @description Upper bound of the 95% interval.
-             */
-            damage_ratio_upper: number;
-            /**
-             * Is Uninsurable
-             * @description Whether this year crosses the threshold.
-             */
-            is_uninsurable: boolean;
-            /**
-             * Exceeds Survivability Limit
-             * @description Whether wet-bulb temperature exceeds the 35 °C human survivability limit. No material choice mitigates this.
-             */
-            exceeds_survivability_limit: boolean;
-        };
-        /**
-         * YearlyHazardProjection
-         * @description Projected hazard intensities for one year at one location.
-         *
-         *     Units are the canonical internal ones from CLAUDE.md: m/s, mm, °C.
-         */
-        YearlyHazardProjection: {
-            /** Year */
-            year: number;
-            /**
-             * Peak Wind Speed Ms
-             * @description Annual maximum sustained wind speed, metres per second.
-             */
-            peak_wind_speed_ms: number;
-            /**
-             * Max Daily Rainfall Mm
-             * @description Annual maximum single-day rainfall, millimetres.
-             */
-            max_daily_rainfall_mm: number;
-            /**
-             * Max Temperature C
-             * @description Annual maximum daily temperature, degrees Celsius.
-             */
-            max_temperature_c: number;
-            /**
-             * Max Wet Bulb Temperature C
-             * @description Annual maximum wet-bulb temperature, degrees Celsius. Above 35 °C a site is unlivable regardless of construction, so this can override the material-based score.
-             */
-            max_wet_bulb_temperature_c: number;
+            band: "poor" | "marginal" | "adequate" | "good" | "excellent";
+            /** Compliant */
+            compliant: boolean;
+            /** Findings */
+            findings: components["schemas"]["ComplianceFindingResponse"][];
         };
     };
     responses: never;
@@ -1008,148 +986,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessResponse"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    create_site_api_sites_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SiteCreateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SiteResponse"];
-                };
-            };
-            /** @description The polygon is malformed, self-intersecting, or outside the supported footprint range. */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    get_site_api_sites__site_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Identifier returned when the site was created. */
-                site_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SiteResponse"];
-                };
-            };
-            /** @description No site exists with that id. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Error */
-            default: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-        };
-    };
-    get_climate_profile_api_climate_profile_get: {
-        parameters: {
-            query: {
-                longitude: number;
-                latitude: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ClimateProfile"];
-                };
-            };
-            /** @description Earth Engine failed or returned unusable data. */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Earth Engine credentials are not configured. */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Earth Engine did not respond within its budget. */
-            504: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Error */
@@ -1234,6 +1070,86 @@ export interface operations {
             };
         };
     };
+    list_districts_api_score_districts_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DistrictListResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    resolve_pin_api_score_resolve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PinRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PinResolutionResponse"];
+                };
+            };
+            /** @description The request did not match the expected shape. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No measured climate profile for that district, or models not trained. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     create_score_api_score_post: {
         parameters: {
             query?: never;
@@ -1256,16 +1172,7 @@ export interface operations {
                     "application/json": components["schemas"]["ScoreResponse"];
                 };
             };
-            /** @description No such site. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description A material code is unknown or invalid for its component. */
+            /** @description The request did not match the expected shape. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1274,7 +1181,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Earth Engine is unconfigured, or the ML artifacts are missing. */
+            /** @description No measured climate profile for that district, or models not trained. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1294,7 +1201,58 @@ export interface operations {
             };
         };
     };
-    prove_api_score_prove_post: {
+    create_area_score_api_score_area_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AreaScoreRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScoreResponse"];
+                };
+            };
+            /** @description The request did not match the expected shape. */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No measured climate profile for that district, or models not trained. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    download_report_api_reports_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -1307,25 +1265,17 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Successful Response */
+            /** @description The report. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProveResponse"];
+                    "application/json": unknown;
+                    "application/pdf": unknown;
                 };
             };
-            /** @description No such site. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description A material code is unknown or invalid for its component. */
+            /** @description The request did not match the expected shape. */
             422: {
                 headers: {
                     [name: string]: unknown;
@@ -1334,7 +1284,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Earth Engine is unconfigured, or the ML artifacts are missing. */
+            /** @description No measured climate profile for that district, or models not trained. */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -1354,38 +1304,27 @@ export interface operations {
             };
         };
     };
-    create_report_api_reports_post: {
+    get_tile_api_tiles__z___x___y__get: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                z: number;
+                x: number;
+                y: number;
+            };
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReportRequest"];
-            };
-        };
+        requestBody?: never;
         responses: {
             /** @description Successful Response */
-            201: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content: {
-                    "application/json": components["schemas"]["ReportResponse"];
-                };
+                content?: never;
             };
-            /** @description No such score. */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Gemini failed or returned nothing usable. */
+            /** @description The upstream map or geocoding service failed. */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -1394,8 +1333,86 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Gemini is not configured. */
-            503: {
+            /** @description The upstream map or geocoding service did not respond in time. */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_basemap_capabilities_api_basemap_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BasemapCapabilities"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    search_places_api_geocode_get: {
+        parameters: {
+            query: {
+                q: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GeocodeResponse"];
+                };
+            };
+            /** @description The upstream map or geocoding service failed. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description The upstream map or geocoding service did not respond in time. */
+            504: {
                 headers: {
                     [name: string]: unknown;
                 };

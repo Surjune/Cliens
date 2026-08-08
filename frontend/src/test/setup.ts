@@ -27,9 +27,26 @@ beforeAll(() => {
     })
   );
 
-  // Recharts' ResponsiveContainer observes its parent's size. jsdom implements
-  // no ResizeObserver, so a minimal stand-in is installed; combined with the
-  // fixed dimensions below, charts render at a deterministic size.
+  // Motion and the globe both read `prefers-reduced-motion`, and jsdom has no
+  // matchMedia at all. Reporting "no preference" keeps tests on the same path a
+  // default browser takes, rather than silently exercising the reduced branch.
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }))
+  );
+
+  // The globe sizes its WebGL canvas from a ResizeObserver, which jsdom does not
+  // implement. A minimal stand-in is installed; combined with the fixed
+  // dimensions below, measured components render at a deterministic size.
   vi.stubGlobal(
     'ResizeObserver',
     class {
@@ -45,8 +62,8 @@ beforeAll(() => {
     }
   );
 
-  // Leaflet measures its container during initialisation. jsdom reports every
-  // element as 0x0, which makes the map throw, so give it a deterministic size.
+  // jsdom reports every element as 0x0, which would leave any size-measured
+  // component permanently at zero, so give it a deterministic size.
   Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
     configurable: true,
     value: 1024,

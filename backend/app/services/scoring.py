@@ -1,475 +1,262 @@
-"""The score engine.
+"""The Building Quality Score engine.
 
-Combines climate profile, damage calibration and material resistance into a
-deterministic, auditable Climate Lien Score.
+Combines a district's measured climate with a proposed material specification to
+produce a 0-100 score, and always computes both sides of the comparison:
 
-Determinism, which is the property the whole product rests on:
+* **evaluate** — score the materials the user proposes;
+* **recommend** — derive a compliant specification for that district.
 
-* the climate profile is replayed from cache, so upstream changes cannot move a
-  re-score;
-* every calculation is a pure function in ``core/calculations``;
-* the model artifacts are pinned and their versions are part of the input hash;
-* scoring the same inputs twice returns the stored row rather than recomputing.
+Whichever mode is asked for, the other is computed too, so a before/after is
+always available. That is cheap because the recommendation is *derived* from the
+exposure class rather than searched for, which also makes it compliant by
+construction and its reasoning the standard itself.
 
-Every number in the response is traceable to an input. Nothing here is a black box.
+The score is rules-derived. ``rules_engine.quality_score_label`` defines it; the ML
+model smooths that definition and supplies the headline figure, with the rules
+value returned alongside so the two can be compared. Neither is evidence about
+real building outcomes.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
-import uuid
+from dataclasses import dataclass
 
-from app.core import calculations, constants
-from app.core.exceptions import ResourceNotFoundError
+from app.core import constants
 from app.core.logging import get_logger
-from app.ml.damage_calibration import DamageCalibrationModel
-from app.ml.material_ranker import MaterialRankerModel
-from app.repositories.scores import ScoreRecord, ScoreRepository
-from app.repositories.sites import SiteRepository
-from app.schemas.climate import ClimateProfile, YearlyHazardProjection
-from app.schemas.materials import MaterialSelection, ResolvedMaterial
-from app.schemas.scoring import (
-    ComponentBreakdown,
-    HazardContribution,
-    MaterialRecommendation,
-    ProveResponse,
-    ScoreBreakdown,
-    ScoreResponse,
-    YearBreakdown,
-)
+from app.ml.quality_score import QualityScoreModel
+from app.repositories.district_profiles import DistrictClimateProfile
+from app.repositories.knowledge_base import ExposureClass, KnowledgeBase, load_knowledge_base
+from app.services.area_climate import AreaBounds, AreaClimate, AreaClimateService
 from app.services.climate_data import ClimateDataService
-from app.services.materials import MaterialService
+from app.services.rules_engine import (
+    ClimateSummary,
+    ConcreteMix,
+    ElementSituation,
+    MaterialSelection,
+    RulesAssessment,
+    assess,
+    classify_exposure,
+    quality_score_label,
+)
 
 logger = get_logger(__name__)
 
+# Cement types satisfying the marine recommendations, per IS 456's guidance on
+# chloride and sulphate resistance.
+MARINE_CEMENT = "PSC"
+DEFAULT_CEMENT = "PPC"
 
-class ScoringService:
-    """Computes and persists Climate Lien Scores."""
+# Walling preference by climate, from the reference table's "best suited climate"
+# column, most preferred first.
+HUMID_WALLING = ("fly_ash_brick", "concrete_solid_block", "aac_block")
+HOT_WALLING = ("aac_block", "fly_ash_brick", "concrete_solid_block")
+
+
+@dataclass(frozen=True, slots=True)
+class ScoredSelection:
+    """One material specification, scored and explained."""
+
+    selection: MaterialSelection
+    assessment: RulesAssessment
+    rules_score: float
+    model_score: float
+
+    @property
+    def score(self) -> float:
+        """The headline figure: the model's smoothed value."""
+        return self.model_score
+
+    @property
+    def band(self) -> str:
+        """Plain-language verdict for the score."""
+        for label, upper in constants.SCORE_BAND_THRESHOLDS:
+            if self.score <= upper:
+                return label
+        return constants.SCORE_BAND_THRESHOLDS[-1][0]
+
+
+@dataclass(frozen=True, slots=True)
+class ScoreComparison:
+    """Before and after, always both present."""
+
+    district: str
+    climate: DistrictClimateProfile
+    exposure: ExposureClass
+    exposure_reasons: tuple[str, ...]
+    proposed: ScoredSelection
+    recommended: ScoredSelection
+    provenance: dict[str, str]
+    model_version: str
+
+    @property
+    def improvement(self) -> float:
+        """Points the recommended specification adds over the proposed one."""
+        return round(self.recommended.score - self.proposed.score, 1)
+
+
+class QualityScoringService:
+    """Scores material specifications against a district's measured climate."""
 
     def __init__(
         self,
         *,
-        sites: SiteRepository,
-        scores: ScoreRepository,
-        materials: MaterialService,
         climate: ClimateDataService,
-        damage_model: DamageCalibrationModel,
-        ranker_model: MaterialRankerModel,
+        model: QualityScoreModel,
+        knowledge_base: KnowledgeBase | None = None,
+        area: AreaClimateService | None = None,
     ) -> None:
-        """Bind the engine to its collaborators."""
-        self._sites = sites
-        self._scores = scores
-        self._materials = materials
+        """Bind the engine to its climate source, model and knowledge base."""
         self._climate = climate
-        self._damage_model = damage_model
-        self._ranker_model = ranker_model
+        self._model = model
+        self._knowledge_base = knowledge_base or load_knowledge_base()
+        self._area = area or AreaClimateService(climate.profile_set)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-    async def score(self, *, site_id: uuid.UUID, selection: MaterialSelection) -> ScoreResponse:
-        """Compute the baseline score for a site and material selection.
-
-        Raises:
-            ResourceNotFoundError: If the site does not exist.
-            UnknownMaterialError: If a material code cannot be resolved.
-            ExternalServiceUnconfiguredError: If Earth Engine is not configured.
-        """
-        return await self._score_scenario(site_id=site_id, selection=selection, scenario="baseline")
-
-    async def prove(self, *, site_id: uuid.UUID, selection: MaterialSelection) -> ProveResponse:
-        """Score the site, recommend better materials, and re-score with them.
-
-        Both scores come from the same engine and the same cached climate profile,
-        so the two crossing years are directly comparable.
-        """
-        baseline = await self._score_scenario(
-            site_id=site_id, selection=selection, scenario="baseline"
-        )
-
-        recommendations = await self._recommend(site_id=site_id, baseline=baseline)
-        improved_selection = self._apply(selection, recommendations)
-
-        improved = await self._score_scenario(
-            site_id=site_id, selection=improved_selection, scenario="improved"
-        )
-
-        years_gained: int | None = None
-        if baseline.crossing_year is not None and improved.crossing_year is not None:
-            years_gained = improved.crossing_year - baseline.crossing_year
-
-        logger.info(
-            "prove_completed",
-            site_id=str(site_id),
-            baseline_year=baseline.crossing_year,
-            improved_year=improved.crossing_year,
-            years_gained=years_gained,
-        )
-
-        return ProveResponse(
-            baseline=baseline,
-            improved=improved,
-            recommendations=recommendations,
-            years_gained=years_gained,
-        )
-
-    # ------------------------------------------------------------------
-    # Core engine
-    # ------------------------------------------------------------------
-    async def _score_scenario(
-        self, *, site_id: uuid.UUID, selection: MaterialSelection, scenario: str
-    ) -> ScoreResponse:
-        """Compute one scenario, returning a stored score when inputs are unchanged."""
-        site = await self._sites.get(site_id)
-        if site is None:
-            raise ResourceNotFoundError(
-                "No site exists with that id.", details={"site_id": str(site_id)}
-            )
-
-        resolved = await self._materials.resolve_selection(selection)
-        versions = {
-            "damage_model": self._damage_model.version,
-            "material_model": self._ranker_model.version,
-        }
-        input_hash = self._hash_inputs(site_id=site_id, selection=selection, versions=versions)
-
-        existing = await self._scores.get_by_hash(input_hash=input_hash, scenario=scenario)
-        if existing is not None:
-            # Idempotency: identical inputs must return an identical score, not a
-            # recomputed one that could differ by a floating-point hair.
-            logger.info("score_served_from_store", site_id=str(site_id), scenario=scenario)
-            return self._to_response(existing)
-
-        profile = await self._climate.get_profile(
-            longitude=site.centroid_longitude, latitude=site.centroid_latitude
-        )
-        resistances: dict[str, dict[str, float]] = {
-            material.component: {
-                "wind": material.resistance.wind,
-                "flood": material.resistance.flood,
-                "heat": material.resistance.heat,
-            }
-            for material in resolved
-        }
-
-        breakdown, crossing, lower, upper = self._evaluate(
-            profile=profile,
-            resistances=resistances,
-            resolved=resolved,
-            area_sq_ft=site.area_sq_ft,
-        )
-
-        interval_width = float(
-            (upper if upper else constants.HORIZON_END_YEAR)
-            - (lower if lower else constants.HORIZON_START_YEAR)
-        )
-        confidence = calculations.confidence_label(abs(interval_width))
-
-        record = await self._scores.create(
-            site_id=site_id,
-            input_hash=input_hash,
-            scenario=scenario,
-            crossing_year=crossing,
-            crossing_year_lower=lower,
-            crossing_year_upper=upper,
-            confidence_label=confidence,
-            breakdown=breakdown.model_dump(mode="json"),
-            damage_model_version=versions["damage_model"],
-            material_model_version=versions["material_model"],
-        )
-
-        logger.info(
-            "score_computed",
-            site_id=str(site_id),
-            scenario=scenario,
-            crossing_year=crossing,
-            confidence=confidence,
-        )
-        return self._to_response(record)
-
-    def _evaluate(
+    def compare(
         self,
         *,
-        profile: ClimateProfile,
-        resistances: dict[str, dict[str, float]],
-        resolved: tuple[ResolvedMaterial, ...],
-        area_sq_ft: float,
-    ) -> tuple[ScoreBreakdown, int | None, int | None, int | None]:
-        """Run the engine over the horizon.
+        district: str,
+        proposed: MaterialSelection | None,
+        situation: ElementSituation = "exposed",
+    ) -> ScoreComparison:
+        """Score a district both as proposed and as recommended.
 
-        Returns:
-            The breakdown, the crossing year, and the bounds of its 95% interval.
-            A bound is ``None`` when that end of the interval never crosses.
+        Args:
+            district: District name; must have a measured profile.
+            proposed: The user's specification. When ``None`` — recommend-only
+                mode — a deliberately conventional baseline is scored instead, so
+                the comparison still shows what the advice is worth.
+            situation: How the element sits relative to the weather.
+
+        Raises:
+            ClimateProfileUnavailableError: If the district has no profile.
         """
-        area_factor = calculations.area_exposure_factor(area_sq_ft)
-
-        rows: list[dict[str, float]] = []
-        per_year_context: list[tuple[YearlyHazardProjection, calculations.StressBreakdown]] = []
-
-        for projection in profile.projections:
-            intensities = self._intensities(projection)
-            stress = calculations.resistance_weighted_stress(intensities, resistances)
-
-            rows.append(
-                {
-                    "stress_total": stress.total * area_factor,
-                    "stress_wind": stress.by_hazard["wind"] * area_factor,
-                    "stress_flood": stress.by_hazard["flood"] * area_factor,
-                    "stress_heat": stress.by_hazard["heat"] * area_factor,
-                    "area_factor": area_factor,
-                }
-            )
-            per_year_context.append((projection, stress))
-
-        predictions = self._damage_model.predict_many(rows)
-
-        years: list[YearBreakdown] = []
-        damage_by_year: dict[int, float] = {}
-        lower_by_year: dict[int, float] = {}
-        upper_by_year: dict[int, float] = {}
-
-        for (projection, _stress), row, prediction in zip(
-            per_year_context, rows, predictions, strict=True
-        ):
-            intensities = self._intensities(projection)
-
-            # Wet-bulb above the survivability limit makes a site unlivable
-            # regardless of construction, so it forces the damage ratio to the
-            # threshold rather than letting good materials mask it.
-            exceeds_survivability = (
-                projection.max_wet_bulb_temperature_c >= constants.WET_BULB_SURVIVABILITY_LIMIT_C
-            )
-            damage = prediction.damage_ratio
-            lower_damage = prediction.lower
-            upper_damage = prediction.upper
-            if exceeds_survivability:
-                damage = max(damage, constants.UNINSURABLE_DAMAGE_RATIO)
-                lower_damage = max(lower_damage, constants.UNINSURABLE_DAMAGE_RATIO)
-                upper_damage = max(upper_damage, constants.UNINSURABLE_DAMAGE_RATIO)
-
-            damage_by_year[projection.year] = damage
-            # The interval on the crossing YEAR is inverted relative to the
-            # interval on damage: more damage means an earlier crossing.
-            lower_by_year[projection.year] = upper_damage
-            upper_by_year[projection.year] = lower_damage
-
-            years.append(
-                YearBreakdown(
-                    year=projection.year,
-                    peak_wind_speed_ms=projection.peak_wind_speed_ms,
-                    max_daily_rainfall_mm=projection.max_daily_rainfall_mm,
-                    max_temperature_c=projection.max_temperature_c,
-                    max_wet_bulb_temperature_c=projection.max_wet_bulb_temperature_c,
-                    intensity_wind=intensities["wind"],
-                    intensity_flood=intensities["flood"],
-                    intensity_heat=intensities["heat"],
-                    stress_total=row["stress_total"],
-                    damage_ratio=damage,
-                    damage_ratio_lower=lower_damage,
-                    damage_ratio_upper=upper_damage,
-                    is_uninsurable=calculations.is_uninsurable(damage),
-                    exceeds_survivability_limit=exceeds_survivability,
-                )
-            )
-
-        crossing = calculations.first_crossing_year(damage_by_year)
-        lower = calculations.first_crossing_year(lower_by_year)
-        upper = calculations.first_crossing_year(upper_by_year)
-
-        # The component decomposition is reported at the year that actually decides
-        # the score, which is the year a reviewer will want to interrogate.
-        focus_year = crossing if crossing is not None else constants.HORIZON_END_YEAR
-        focus_index = next(
-            index
-            for index, (projection, _) in enumerate(per_year_context)
-            if projection.year == focus_year
-        )
-        _, focus_stress = per_year_context[focus_index]
-
-        by_component: dict[str, ResolvedMaterial] = {
-            material.component: material for material in resolved
-        }
-        components = tuple(
-            ComponentBreakdown(
-                component=contribution.component,
-                material_code=by_component[contribution.component].code,
-                material_name=by_component[contribution.component].name,
-                total=contribution.total,
-                by_hazard=tuple(
-                    HazardContribution(hazard=hazard, contribution=value)
-                    for hazard, value in contribution.hazard_contributions.items()
-                ),
-            )
-            for contribution in focus_stress.by_component
+        return self.compare_profile(
+            profile=self._climate.get_profile(district),
+            proposed=proposed,
+            situation=situation,
         )
 
-        breakdown = ScoreBreakdown(
-            uninsurable_damage_threshold=constants.UNINSURABLE_DAMAGE_RATIO,
-            area_sq_ft=area_sq_ft,
-            area_exposure_factor=area_factor,
-            materials=resolved,
-            components=components,
-            years=tuple(years),
-        )
-        return breakdown, crossing, lower, upper
+    def compare_area(
+        self,
+        *,
+        area: AreaBounds,
+        proposed: MaterialSelection | None,
+        situation: ElementSituation = "exposed",
+    ) -> tuple[ScoreComparison, AreaClimate]:
+        """Score a drawn area both as proposed and as recommended.
 
-    @staticmethod
-    def _intensities(projection: YearlyHazardProjection) -> dict[str, float]:
-        """Normalise one year's projected hazards against their design references."""
-        return {
-            "wind": calculations.normalise_hazard_intensity(
-                projection.peak_wind_speed_ms, constants.WIND_REFERENCE_MS
-            ),
-            "flood": calculations.normalise_hazard_intensity(
-                projection.max_daily_rainfall_mm, constants.RAINFALL_REFERENCE_MM_PER_DAY
-            ),
-            "heat": calculations.normalise_hazard_intensity(
-                projection.max_temperature_c, constants.HEAT_REFERENCE_MAX_TEMP_C
-            ),
-        }
+        The derived ``AreaClimate`` is returned alongside the comparison rather than
+        folded into it, because the caller must be able to tell the user whether the
+        climate behind their score was measured inside the area or interpolated from
+        outside it. Dropping that on the floor here would make the two
+        indistinguishable downstream.
 
-    # ------------------------------------------------------------------
-    # Recommendations
-    # ------------------------------------------------------------------
-    async def _recommend(
-        self, *, site_id: uuid.UUID, baseline: ScoreResponse
-    ) -> tuple[MaterialRecommendation, ...]:
-        """Suggest a better material for each component, where one exists."""
-        catalogue = await self._materials.get_catalogue()
-        peak = self._peak_intensities(baseline)
-
-        current: dict[str, ResolvedMaterial] = {
-            material.component: material for material in baseline.breakdown.materials
-        }
-        grouped = {
-            "foundation": catalogue.foundation,
-            "walls": catalogue.walls,
-            "roofing": catalogue.roofing,
-        }
-
-        recommendations: list[MaterialRecommendation] = []
-        for component in constants.BUILDING_COMPONENTS:
-            candidates = [
-                {
-                    "code": entry.code,
-                    "component": entry.component,
-                    "resistance": {
-                        "wind": entry.resistance.wind,
-                        "flood": entry.resistance.flood,
-                        "heat": entry.resistance.heat,
-                    },
-                    "relative_cost_index": entry.relative_cost_index,
-                }
-                for entry in grouped[component]
-            ]
-            if not candidates:
-                continue
-
-            ranked = self._ranker_model.rank(hazard_intensities=peak, candidates=candidates)
-            best = ranked[0]
-            existing = current[component]
-
-            # Only recommend a genuine change. Suggesting the material already in
-            # use would make the prove step look like it did something when it
-            # did not.
-            if best.code == existing.code:
-                continue
-
-            by_code = {entry.code: entry for entry in grouped[component]}
-            recommendations.append(
-                MaterialRecommendation(
-                    component=component,
-                    current_code=existing.code,
-                    current_name=existing.name,
-                    recommended_code=best.code,
-                    recommended_name=by_code[best.code].name,
-                    predicted_damage_reduction=best.predicted_damage_reduction,
-                    relative_cost_index=best.relative_cost_index,
-                    rationale=self._rationale(component, peak),
-                )
-            )
-
-        return tuple(recommendations)
-
-    @staticmethod
-    def _peak_intensities(baseline: ScoreResponse) -> dict[str, float]:
-        """Peak normalised intensity per hazard across the horizon.
-
-        Recommendations are made against the worst year, not the average: a
-        material chosen for typical conditions is the one that fails in the storm.
+        Raises:
+            ClimateProfileUnavailableError: If no measured node is near enough.
         """
-        return {
-            "wind": max(year.intensity_wind for year in baseline.breakdown.years),
-            "flood": max(year.intensity_flood for year in baseline.breakdown.years),
-            "heat": max(year.intensity_heat for year in baseline.breakdown.years),
-        }
-
-    @staticmethod
-    def _rationale(component: str, peak: dict[str, float]) -> str:
-        """Explain in one sentence why a component is being upgraded."""
-        dominant = max(
-            peak,
-            key=lambda hazard: peak[hazard]
-            * constants.COMPONENT_HAZARD_SENSITIVITY[component][hazard],
+        area_climate = self._area.for_area(area)
+        comparison = self.compare_profile(
+            profile=area_climate.profile,
+            proposed=proposed,
+            situation=situation,
         )
-        readable = {
-            "wind": "peak wind loading",
-            "flood": "extreme rainfall and flooding",
-            "heat": "extreme heat",
-        }[dominant]
-        return (
-            f"For this site the {component} is dominated by {readable}; this option "
-            f"removes the most damage per unit of additional cost."
-        )
+        return comparison, area_climate
 
-    @staticmethod
-    def _apply(
-        selection: MaterialSelection, recommendations: tuple[MaterialRecommendation, ...]
-    ) -> MaterialSelection:
-        """Return the selection with every recommendation applied."""
-        updated = selection.as_mapping()
-        for recommendation in recommendations:
-            updated[recommendation.component] = recommendation.recommended_code
-        return MaterialSelection(**updated)
+    def compare_profile(
+        self,
+        *,
+        profile: DistrictClimateProfile,
+        proposed: MaterialSelection | None,
+        situation: ElementSituation = "exposed",
+    ) -> ScoreComparison:
+        """Score one climate profile, however it was obtained.
 
-    # ------------------------------------------------------------------
-    # Idempotency and mapping
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _hash_inputs(
-        *, site_id: uuid.UUID, selection: MaterialSelection, versions: dict[str, str]
-    ) -> str:
-        """Hash everything a score depends on.
-
-        Model versions are included deliberately: after retraining, the same site
-        and materials must produce a NEW score rather than silently replaying one
-        computed by a superseded model.
+        The shared core of both modes. Named-district scoring and area scoring
+        differ only in where the profile came from; keeping the scoring itself in
+        one place is what stops the two paths drifting apart.
         """
-        payload = {
-            "site_id": str(site_id),
-            "materials": selection.as_mapping(),
-            "versions": versions,
-            # Bumped when the engine's own maths changes, so old scores are not
-            # replayed under new logic.
-            "engine_version": 1,
-        }
-        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        summary = self._climate.to_rules_summary(profile)
+
+        baseline = proposed if proposed is not None else self._conventional_baseline(situation)
+        scored_proposed = self._score(summary, baseline)
+        scored_recommended = self._score(summary, self.recommend(summary, situation))
+
+        logger.info(
+            "quality_score_compared",
+            district=profile.district,
+            proposed=scored_proposed.score,
+            recommended=scored_recommended.score,
+            exposure=scored_proposed.assessment.assessment.exposure.id,
+        )
+
+        return ScoreComparison(
+            district=profile.district,
+            climate=profile,
+            exposure=scored_proposed.assessment.assessment.exposure,
+            exposure_reasons=scored_proposed.assessment.assessment.reasons,
+            proposed=scored_proposed,
+            recommended=scored_recommended,
+            provenance=self._climate.provenance,
+            model_version=self._model.version,
+        )
+
+    def recommend(self, summary: ClimateSummary, situation: ElementSituation) -> MaterialSelection:
+        """Derive a compliant specification for this climate.
+
+        Built from the exposure class's own minimums, with a margin added above
+        each because specifying exactly at the limit leaves nothing for site
+        variation.
+        """
+        exposure = classify_exposure(summary, situation, self._knowledge_base).exposure
+
+        coastal = summary.distance_to_coast_km <= constants.COASTAL_INFLUENCE_KM
+        humid = summary.mean_relative_humidity_percent >= constants.HIGH_HUMIDITY_PERCENT
+        hot = summary.mean_max_temperature_c >= constants.HEAT_REFERENCE_MAX_TEMP_C
+
+        admixtures: list[str] = []
+        if coastal:
+            admixtures.append("corrosion inhibitor")
+        if summary.wetness_index >= constants.WET_REGIME_INDEX:
+            admixtures.append("waterproofing admixture")
+
+        order = HOT_WALLING if hot and not humid else HUMID_WALLING
+        available = {item.id for item in self._knowledge_base.brick_suitability}
+        walling = next((item for item in order if item in available), order[0])
+
+        return MaterialSelection(
+            concrete=ConcreteMix(
+                grade=exposure.min_grade,
+                cement_content_kg_m3=float(exposure.min_cement_kg_m3)
+                + constants.RECOMMENDED_CEMENT_MARGIN_KG_M3,
+                water_cement_ratio=exposure.max_water_cement_ratio
+                - constants.RECOMMENDED_WATER_CEMENT_MARGIN,
+                cement_type=MARINE_CEMENT if coastal else DEFAULT_CEMENT,
+                admixtures=tuple(admixtures),
+            ),
+            walling_material_id=walling,
+            element_situation=situation,
+        )
+
+    def _score(self, summary: ClimateSummary, selection: MaterialSelection) -> ScoredSelection:
+        """Assess a selection and score it by both routes."""
+        assessment = assess(summary, selection, self._knowledge_base)
+        return ScoredSelection(
+            selection=selection,
+            assessment=assessment,
+            rules_score=quality_score_label(assessment),
+            model_score=self._model.predict(summary=summary, selection=selection),
+        )
 
     @staticmethod
-    def _to_response(record: ScoreRecord) -> ScoreResponse:
-        """Map a stored score onto the API response shape."""
-        return ScoreResponse(
-            id=record.id,
-            site_id=record.site_id,
-            scenario=record.scenario,
-            crossing_year=record.crossing_year,
-            crossing_year_lower=record.crossing_year_lower,
-            crossing_year_upper=record.crossing_year_upper,
-            confidence=record.confidence_label,
-            breakdown=ScoreBreakdown.model_validate(record.breakdown),
-            damage_model_version=record.damage_model_version,
-            material_model_version=record.material_model_version,
-            created_at=record.created_at,
+    def _conventional_baseline(situation: ElementSituation) -> MaterialSelection:
+        """The specification a builder would reach for without advice."""
+        return MaterialSelection(
+            concrete=ConcreteMix(
+                grade="M20",
+                cement_content_kg_m3=300.0,
+                water_cement_ratio=0.55,
+                cement_type="OPC",
+            ),
+            walling_material_id="burnt_clay_brick",
+            element_situation=situation,
         )

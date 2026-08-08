@@ -1,24 +1,21 @@
 /**
  * The single typed API client. Every request in the app goes through here.
  *
- * No component calls `fetch` directly — that rule is what stops error handling,
- * correlation IDs and base URLs from being reimplemented slightly differently in
- * a dozen places.
- *
- * Backend errors all share one envelope, so they are decoded once here and thrown
- * as `ApiError`, which carries the machine-readable code the UI branches on.
+ * No component calls `fetch` directly — that rule is what stops error handling and
+ * base URLs from being reimplemented slightly differently in a dozen places.
+ * Backend errors share one envelope, decoded once here and thrown as `ApiError`.
  */
 import type {
-  MaterialCatalogue,
-  MaterialSelection,
-  ProveResponse,
-  ReportResponse,
+  AreaBounds,
+  BasemapCapabilities,
+  DistrictList,
+  GeocodeResults,
+  MaterialSelectionInput,
+  PinResolution,
   ScoreResponse,
-  SiteCreateRequest,
-  SiteResponse,
 } from '@/types/api';
 
-/** Requests go to the same origin; Vite proxies `/api` to the backend in dev. */
+/** Same origin; Vite proxies `/api` to the backend in development. */
 const API_BASE = '/api';
 
 /** A structured failure from the backend, or a transport failure. */
@@ -45,19 +42,27 @@ export class ApiError extends Error {
     this.requestId = options.requestId;
   }
 
-  /** Whether the failure is a missing third-party credential rather than a bug. */
-  get isUnconfigured(): boolean {
-    return this.code === 'EXTERNAL_SERVICE_UNCONFIGURED';
+  /** Whether this is a setup gap rather than a fault in the request. */
+  get isSetupIssue(): boolean {
+    return (
+      this.code === 'CLIMATE_PROFILE_UNAVAILABLE' ||
+      this.code === 'MODEL_UNAVAILABLE' ||
+      this.code === 'KNOWLEDGE_BASE_UNAVAILABLE'
+    );
   }
 }
 
-function isErrorEnvelope(
-  value: unknown
-): value is { error: { code: string; message: string; details?: Record<string, unknown>; request_id?: string } } {
+function isErrorEnvelope(value: unknown): value is {
+  error: {
+    code: string;
+    message: string;
+    details?: Record<string, unknown>;
+    request_id?: string;
+  };
+} {
   return (
     typeof value === 'object' &&
     value !== null &&
-    // `'error' in value` already narrows the type, so no assertion is needed here.
     'error' in value &&
     typeof value.error === 'object'
   );
@@ -73,8 +78,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(`${API_BASE}${path}`, { ...init, headers });
   } catch (cause) {
-    // A network-level failure has no envelope to decode, so it is given one here
-    // rather than surfacing as a bare TypeError in a component.
+    // A transport failure has no envelope to decode, so it is given one here
+    // rather than surfacing as a bare TypeError inside a component.
     throw new ApiError('Could not reach the server. Is the backend running?', {
       code: 'NETWORK_ERROR',
       status: 0,
@@ -83,7 +88,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   const requestId = response.headers.get('X-Request-ID') ?? undefined;
-
   const body: unknown = await response.json().catch(() => null);
 
   if (!response.ok) {
@@ -106,40 +110,111 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const apiClient = {
-  /** Store a drawn site boundary. Area is computed server-side from the polygon. */
-  createSite(payload: SiteCreateRequest): Promise<SiteResponse> {
-    return request<SiteResponse>('/sites', {
+  /** Districts that have a measured climate profile. */
+  getDistricts(): Promise<DistrictList> {
+    return request<DistrictList>('/score/districts');
+  },
+
+  /**
+   * Resolve a point on the globe to the grid cell whose reading applies there.
+   *
+   * Throws `CLIMATE_PROFILE_UNAVAILABLE` for a point outside the observed region.
+   * That rejection is the feature, not an edge case: nearest-cell lookup would
+   * otherwise answer a pin in the Atlantic with a confident inland district.
+   */
+  resolvePin(latitude: number, longitude: number): Promise<PinResolution> {
+    return request<PinResolution>('/score/resolve', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ latitude, longitude }),
     });
   },
 
-  /** Fetch the material catalogue, grouped by building component. */
-  getMaterials(): Promise<MaterialCatalogue> {
-    return request<MaterialCatalogue>('/materials');
+  /**
+   * What the map can actually do with the imagery configured on the server.
+   *
+   * Fetched rather than hardcoded: the zoom ceiling and the attribution both
+   * change with which providers have credentials, and guessing the deeper limit
+   * would let the user zoom into blank tiles.
+   */
+  getBasemapCapabilities(): Promise<BasemapCapabilities> {
+    return request<BasemapCapabilities>('/basemap');
   },
 
-  /** Compute the Climate Lien Score for a site and material selection. */
-  createScore(siteId: string, materials: MaterialSelection): Promise<ScoreResponse> {
+  /** Find a place, address or postcode anywhere on Earth. */
+  geocode(query: string): Promise<GeocodeResults> {
+    return request<GeocodeResults>(`/geocode?q=${encodeURIComponent(query)}`);
+  },
+
+  /**
+   * Score a boundary drawn on the map.
+   *
+   * The response carries `climate_provenance`, which says whether the climate was
+   * measured inside the drawn area or interpolated from surrounding cells. Callers
+   * must surface that — an interpolated reading may not be presented as a measured
+   * one.
+   */
+  scoreArea(
+    area: AreaBounds,
+    materials: MaterialSelectionInput | null,
+    situation: MaterialSelectionInput['element_situation']
+  ): Promise<ScoreResponse> {
+    return request<ScoreResponse>('/score/area', {
+      method: 'POST',
+      body: JSON.stringify({ area, materials, element_situation: situation }),
+    });
+  },
+
+  /**
+   * Score a district.
+   *
+   * Passing `materials` evaluates them; omitting it asks for a recommendation
+   * against a conventional baseline. Either way the reply carries both sides.
+   */
+  score(
+    district: string,
+    materials: MaterialSelectionInput | null,
+    situation: MaterialSelectionInput['element_situation']
+  ): Promise<ScoreResponse> {
     return request<ScoreResponse>('/score', {
       method: 'POST',
-      body: JSON.stringify({ site_id: siteId, materials }),
+      body: JSON.stringify({
+        district,
+        materials,
+        element_situation: situation,
+      }),
     });
   },
 
-  /** Score, recommend better materials, and re-score with them applied. */
-  prove(siteId: string, materials: MaterialSelection): Promise<ProveResponse> {
-    return request<ProveResponse>('/score/prove', {
+  /**
+   * Download the client report as a PDF.
+   *
+   * Goes direct rather than through `request`, which decodes JSON — this endpoint
+   * streams a binary file.
+   */
+  async downloadReport(
+    district: string,
+    materials: MaterialSelectionInput | null,
+    situation: MaterialSelectionInput['element_situation']
+  ): Promise<Blob> {
+    const response = await fetch(`${API_BASE}/reports`, {
       method: 'POST',
-      body: JSON.stringify({ site_id: siteId, materials }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ district, materials, element_situation: situation }),
     });
-  },
 
-  /** Generate a plain-English report for a computed score. */
-  createReport(scoreId: string): Promise<ReportResponse> {
-    return request<ReportResponse>('/reports', {
-      method: 'POST',
-      body: JSON.stringify({ score_id: scoreId }),
-    });
+    if (!response.ok) {
+      const body: unknown = await response.json().catch(() => null);
+      if (isErrorEnvelope(body)) {
+        throw new ApiError(body.error.message, {
+          code: body.error.code,
+          status: response.status,
+        });
+      }
+      throw new ApiError('The report could not be generated.', {
+        code: 'REPORT_FAILED',
+        status: response.status,
+      });
+    }
+    return response.blob();
   },
 };

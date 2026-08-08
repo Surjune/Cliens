@@ -57,6 +57,15 @@ def settings() -> Settings:
             "database_url": base.test_database_url,
             "database_url_sync": base.test_database_url_sync,
             "rate_limit_requests": TEST_RATE_LIMIT_REQUESTS,
+            # Third-party credentials are cleared unconditionally, whatever the
+            # developer's .env holds. Without this the suite changes behaviour the
+            # moment someone configures a real key — the "unconfigured" tests start
+            # failing, and worse, a client can reach the real upstream. Tests that
+            # need credentials build their own Settings.
+            "gemini_api_key": None,
+            "earth_engine_project_id": None,
+            "earth_engine_service_account_email": None,
+            "earth_engine_service_account_file": None,
         }
     )
 
@@ -121,7 +130,9 @@ def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     import socket
 
+    loopback = {"localhost", "127.0.0.1", "::1"}
     real_create_connection = socket.create_connection
+    real_connect = socket.socket.connect
 
     def guarded_create_connection(
         address: tuple[str, int],
@@ -131,14 +142,30 @@ def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
         host = address[0] if isinstance(address, tuple) else address
         # The PostGIS test container is a genuine dependency of integration tests,
         # so loopback stays reachable. Everything else is refused.
-        if host in {"localhost", "127.0.0.1", "::1"}:
+        if host in loopback:
             return real_create_connection(address, *args, **kwargs)
         raise RuntimeError(
             f"Test attempted a real network connection to {host!r}. "
             "Mock the external client instead."
         )
 
+    def guarded_connect(
+        self: socket.socket,
+        address: Any,  # noqa: ANN401 — address form varies by address family
+    ) -> None:
+        # socket.create_connection is not the only route out. The Google API client
+        # used by earthengine-api calls socket.connect directly, so guarding only
+        # the former let a real request reach Google during a test run.
+        host = address[0] if isinstance(address, tuple) else address
+        if host in loopback:
+            return real_connect(self, address)
+        raise RuntimeError(
+            f"Test attempted a real network connection to {host!r}. "
+            "Mock the external client instead."
+        )
+
     monkeypatch.setattr(socket, "create_connection", guarded_create_connection)
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
 
 
 @pytest.fixture

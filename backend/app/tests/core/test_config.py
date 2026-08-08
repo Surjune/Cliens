@@ -25,6 +25,13 @@ def build_settings(**overrides: object) -> Settings:
         "database_url": VALID_ASYNC_URL,
         "database_url_sync": VALID_SYNC_URL,
         "test_database_url": VALID_ASYNC_URL,
+        # Cleared explicitly: pydantic-settings falls back to the ambient .env for
+        # any field not passed, so without these a developer with real credentials
+        # configured would see these tests fail for no reason of their own.
+        "gemini_api_key": None,
+        "earth_engine_project_id": None,
+        "earth_engine_service_account_email": None,
+        "earth_engine_service_account_file": None,
     }
     return Settings(**{**defaults, **overrides})  # type: ignore[arg-type]  # kwargs are validated
 

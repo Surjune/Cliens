@@ -1,271 +1,159 @@
-"""Builds a climate risk profile from Earth Engine projections and IMD context, with caching.
+"""Serves measured district climate, reduced to what the IS 456 rules consume.
 
-The cache is what makes ``/score`` deterministic. Earth Engine responses are stored
-against the rounded centroid and year range, so re-scoring a site replays the exact
-projections the first score used. Without that, a re-score could move purely because
-NASA republished the dataset between the two calls.
+Thin by design. All the work happens offline in the GRIB pipeline; at request time
+this looks up a precomputed profile and adapts it to the shape the rules engine
+expects. There is no network call and no projection.
 
-All unit conversion from upstream units to the canonical internal ones happens here,
-at the boundary, and is annotated inline.
+Rainfall note that governs one design choice here: the source accumulates over a
+single hour, so ``ClimateSummary.annual_rainfall_mm`` cannot be filled honestly.
+The rules engine takes a wetness *index* instead — see ``to_rules_summary``.
 """
 
 from __future__ import annotations
 
-import statistics
-from datetime import UTC, datetime
-from typing import Any
-
-from app.core import calculations, constants
-from app.core.exceptions import ExternalServiceError
+from app.core import constants
 from app.core.logging import get_logger
-from app.external.earth_engine import EarthEngineClient
-from app.external.imd import DistrictHistory, IMDClient
-from app.repositories.cache import ExternalCacheRepository, build_location_cache_key
-from app.schemas.climate import (
-    ClimateProfile,
-    DataProvenance,
-    HistoricalContext,
-    YearlyHazardProjection,
+from app.repositories.district_profiles import (
+    ClimateProfileSet,
+    ClimateProfileUnavailableError,
+    DistrictClimateProfile,
+    load_climate_profiles,
 )
-from app.schemas.common import Centroid
+from app.schemas.scoring import CoverageBounds, DistrictLocation
+from app.services.rules_engine import ClimateSummary
 
 logger = get_logger(__name__)
 
 
 class ClimateDataService:
-    """Assembles the climate risk profile for a site."""
+    """Reads measured climate profiles for a district."""
 
-    def __init__(
-        self,
-        *,
-        earth_engine: EarthEngineClient,
-        imd: IMDClient,
-        cache: ExternalCacheRepository,
-    ) -> None:
-        """Bind the service to its clients and cache."""
-        self._earth_engine = earth_engine
-        self._imd = imd
-        self._cache = cache
+    def __init__(self, profiles: ClimateProfileSet | None = None) -> None:
+        """Bind the service to a profile set, loading the bundle by default."""
+        self._profiles = profiles or load_climate_profiles()
 
-    async def get_profile(self, *, longitude: float, latitude: float) -> ClimateProfile:
-        """Build the climate profile for a location.
+    @property
+    def profile_set(self) -> ClimateProfileSet:
+        """The loaded profiles, for services that need the whole set.
 
-        Args:
-            longitude: WGS84 longitude of the site centroid.
-            latitude: WGS84 latitude of the site centroid.
+        Exposed so area interpolation can reach every node without loading the
+        bundle a second time and risking two views of the same data.
+        """
+        return self._profiles
 
-        Returns:
-            Projections for every year of the horizon, historical context where
-            available, and provenance for both.
+    @property
+    def available_districts(self) -> tuple[str, ...]:
+        """Districts with a measured profile."""
+        return self._profiles.names()
+
+    @property
+    def locations(self) -> tuple[DistrictLocation, ...]:
+        """Where each supported district sits, for map and globe pickers."""
+        return tuple(
+            DistrictLocation(
+                name=profile.district,
+                grid_latitude=profile.grid_latitude,
+                grid_longitude=profile.grid_longitude,
+            )
+            for profile in self._profiles.profiles
+        )
+
+    @property
+    def coverage(self) -> CoverageBounds:
+        """The bounding box of the observed region, derived from the profiles.
+
+        Computed rather than declared so it cannot fall out of step with the data
+        if the GRIB source is ever re-cut over a different area.
 
         Raises:
-            ExternalServiceUnconfiguredError: If Earth Engine credentials are
-                absent. No projection means no score; a fabricated one is worse.
-            ExternalServiceError: If Earth Engine failed or returned unusable data.
+            ClimateProfileUnavailableError: If no profiles are loaded.
         """
-        raw, provenance = await self._fetch_projections(longitude=longitude, latitude=latitude)
-        projections = self._to_projections(raw)
+        profiles = self._profiles.profiles
+        if not profiles:
+            raise ClimateProfileUnavailableError("No district climate profiles are loaded.")
 
-        history = await self._imd.fetch_district_history(longitude=longitude, latitude=latitude)
+        latitudes = [profile.grid_latitude for profile in profiles]
+        longitudes = [profile.grid_longitude for profile in profiles]
+        return CoverageBounds(
+            south=min(latitudes),
+            north=max(latitudes),
+            west=min(longitudes),
+            east=max(longitudes),
+        )
+
+    def resolve_nearest(
+        self, latitude: float, longitude: float
+    ) -> tuple[DistrictClimateProfile, float]:
+        """Resolve dropped-pin coordinates to a supported district and its distance.
+
+        Refuses rather than guesses once the pin leaves the observed region. A
+        nearest-node lookup never fails on its own, so without this check a pin
+        dropped anywhere on Earth would come back with a confident Indian district
+        and a score describing somewhere thousands of kilometres away.
+
+        Raises:
+            ClimateProfileUnavailableError: If the nearest grid node is further than
+                ``MAX_PIN_TO_GRID_DISTANCE_KM``, or no profiles are loaded.
+        """
+        profile, distance_km = self._profiles.nearest(latitude, longitude)
+
+        if distance_km > constants.MAX_PIN_TO_GRID_DISTANCE_KM:
+            logger.info(
+                "pin_outside_observed_region",
+                latitude=latitude,
+                longitude=longitude,
+                nearest_district=profile.district,
+                distance_km=round(distance_km, 1),
+            )
+            raise ClimateProfileUnavailableError(
+                "There is no measured climate for that point. The nearest place we "
+                f"hold data for is {profile.district}, {distance_km:,.0f} km away. "
+                "Pick somewhere inside the highlighted region."
+            )
 
         logger.info(
-            "climate_profile_built",
-            longitude=longitude,
+            "coordinates_resolved_to_district",
             latitude=latitude,
-            years=len(projections),
-            has_history=history is not None,
-        )
-
-        return ClimateProfile(
-            centroid=Centroid(longitude=longitude, latitude=latitude),
-            projections=projections,
-            historical=self._to_history(history),
-            provenance=(*provenance, self._history_provenance(history)),
-        )
-
-    # ------------------------------------------------------------------
-    # Projections
-    # ------------------------------------------------------------------
-    async def _fetch_projections(
-        self, *, longitude: float, latitude: float
-    ) -> tuple[dict[str, Any], tuple[DataProvenance, ...]]:
-        """Return the raw Earth Engine payload, from cache when one is live."""
-        cache_key = build_location_cache_key(
-            dataset=(
-                f"{constants.EARTH_ENGINE_CMIP6_DATASET}"
-                f"/{constants.EARTH_ENGINE_CMIP6_SCENARIO}"
-            ),
             longitude=longitude,
-            latitude=latitude,
-            start_year=constants.HORIZON_START_YEAR,
-            end_year=constants.HORIZON_END_YEAR,
+            district=profile.district,
+            distance_km=round(distance_km, 1),
         )
+        return profile, distance_km
 
-        cached = await self._cache.get(service="earth_engine", cache_key=cache_key)
-        if cached is not None:
-            return cached, (
-                DataProvenance(
-                    service="earth_engine",
-                    dataset=cached.get("dataset", constants.EARTH_ENGINE_CMIP6_DATASET),
-                    retrieved_at=datetime.fromisoformat(cached["retrieved_at"]),
-                    served_from_cache=True,
-                    notes=(
-                        f"Scenario {cached.get('scenario')}, "
-                        f"{len(cached.get('models', []))}-model ensemble. Replayed from "
-                        "cache so re-scoring cannot drift."
-                    ),
-                ),
-            )
+    @property
+    def provenance(self) -> dict[str, str]:
+        """Where the profiles came from, for display alongside any score."""
+        return {
+            "source": self._profiles.source_grib,
+            "dataset": "ECMWF ERA5 reanalysis",
+            "observation_start": self._profiles.observation_start,
+            "observation_end": self._profiles.observation_end,
+        }
 
-        payload = await self._earth_engine.fetch_projections(
-            longitude=longitude,
-            latitude=latitude,
-            start_year=constants.HORIZON_START_YEAR,
-            end_year=constants.HORIZON_END_YEAR,
-        )
-        retrieved_at = datetime.now(UTC)
-        payload["retrieved_at"] = retrieved_at.isoformat()
-
-        await self._cache.put(service="earth_engine", cache_key=cache_key, payload=payload)
-
-        return payload, (
-            DataProvenance(
-                service="earth_engine",
-                dataset=payload["dataset"],
-                retrieved_at=retrieved_at,
-                served_from_cache=False,
-                notes=(
-                    f"Scenario {payload['scenario']}, " f"{len(payload['models'])}-model ensemble."
-                ),
-            ),
-        )
-
-    @staticmethod
-    def _to_projections(raw: dict[str, Any]) -> tuple[YearlyHazardProjection, ...]:
-        """Convert raw per-model records into one converted projection per year.
-
-        Records arrive as one entry per (year, model). The ensemble mean across
-        models is used for the point estimate, because a single model's structural
-        bias should not decide a permit.
+    def get_profile(self, district: str) -> DistrictClimateProfile:
+        """Measured climate for one district.
 
         Raises:
-            ExternalServiceError: If a year is missing every band it needs. Silently
-                dropping the year would leave a gap the score engine would then
-                treat as absent risk.
+            ClimateProfileUnavailableError: If the district has no profile.
         """
-        by_year: dict[int, list[dict[str, Any]]] = {}
-        for record in raw["records"]:
-            year = int(record["year"])
-            by_year.setdefault(year, []).append(record)
+        profile = self._profiles.get(district)
+        logger.info("climate_profile_read", district=profile.district)
+        return profile
 
-        projections: list[YearlyHazardProjection] = []
-        for year in sorted(by_year):
-            records = by_year[year]
+    def to_rules_summary(self, profile: DistrictClimateProfile) -> ClimateSummary:
+        """Adapt a measured profile to the rules engine's input.
 
-            temperature_k = _mean_band(records, constants.EARTH_ENGINE_BAND_MAX_TEMPERATURE)
-            precipitation_flux = _mean_band(records, constants.EARTH_ENGINE_BAND_PRECIPITATION)
-            wind_ms = _mean_band(records, constants.EARTH_ENGINE_BAND_WIND_SPEED)
-            humidity_percent = _mean_band(records, constants.EARTH_ENGINE_BAND_RELATIVE_HUMIDITY)
-
-            if None in (temperature_k, precipitation_flux, wind_ms, humidity_percent):
-                raise ExternalServiceError(
-                    f"Earth Engine returned incomplete bands for {year}.",
-                    service="earth_engine",
-                    details={"year": year},
-                )
-
-            # tasmax is published in kelvin -> degrees Celsius.
-            max_temperature_c = calculations.kelvin_to_celsius(float(temperature_k or 0.0))
-            # pr is published in kg m-2 s-1 -> millimetres per day.
-            rainfall_mm = calculations.precipitation_flux_to_mm_per_day(
-                float(precipitation_flux or 0.0)
-            )
-            # hurs is a percentage, clamped because ensemble means can round just
-            # past 100 and the wet-bulb fit is only defined on [0, 100].
-            humidity = calculations.clamp(float(humidity_percent or 0.0), 0.0, 100.0)
-
-            projections.append(
-                YearlyHazardProjection(
-                    year=year,
-                    # sfcWind is already metres per second.
-                    peak_wind_speed_ms=max(0.0, float(wind_ms or 0.0)),
-                    max_daily_rainfall_mm=max(0.0, rainfall_mm),
-                    max_temperature_c=max_temperature_c,
-                    max_wet_bulb_temperature_c=calculations.wet_bulb_temperature_c(
-                        max_temperature_c, humidity
-                    ),
-                )
-            )
-
-        if not projections:
-            raise ExternalServiceError(
-                "Earth Engine returned no projections for the scoring horizon.",
-                service="earth_engine",
-            )
-        return tuple(projections)
-
-    # ------------------------------------------------------------------
-    # Historical context
-    # ------------------------------------------------------------------
-    @staticmethod
-    def _to_history(history: DistrictHistory | None) -> HistoricalContext | None:
-        """Map district history onto the API shape, or pass through absence."""
-        if history is None:
-            return None
-        return HistoricalContext(
-            district=history.district,
-            state=history.state,
-            cyclone_events_recorded=history.cyclone_events_recorded,
-            strongest_recorded_wind_ms=history.strongest_recorded_wind_ms,
-            strongest_recorded_category=calculations.classify_cyclone_category(
-                history.strongest_recorded_wind_ms
-            ),
-            wettest_recorded_day_mm=history.wettest_recorded_day_mm,
-            record_period_start_year=history.record_period_start_year,
-            record_period_end_year=history.record_period_end_year,
+        ``wetness_index`` replaces an annual rainfall depth. It is the fraction of
+        sampled hours that were wet, which the source supports directly, whereas an
+        annual total would require assuming a diurnal cycle the file does not
+        contain.
+        """
+        return ClimateSummary(
+            district=profile.district,
+            mean_relative_humidity_percent=profile.mean_relative_humidity_percent,
+            wetness_index=profile.wet_hours_fraction,
+            wet_dry_cycles_per_year=profile.wet_dry_cycles_per_year,
+            max_wind_gust_ms=profile.max_wind_gust_ms,
+            mean_max_temperature_c=profile.mean_max_temperature_c,
+            distance_to_coast_km=profile.distance_to_coast_km,
         )
-
-    @staticmethod
-    def _history_provenance(history: DistrictHistory | None) -> DataProvenance:
-        """Describe where the historical context came from, including its absence."""
-        if history is None:
-            return DataProvenance(
-                service="imd",
-                dataset="district_history",
-                retrieved_at=datetime.now(UTC),
-                served_from_cache=False,
-                notes=(
-                    "No historical record is available for this location. IMD "
-                    "coverage is uneven and no substitute figures were used."
-                ),
-            )
-        return DataProvenance(
-            service="imd",
-            dataset="district_history",
-            retrieved_at=datetime.now(UTC),
-            served_from_cache=history.from_fallback,
-            notes=(
-                f"{history.source_note} "
-                + (
-                    "Served from the bundled offline snapshot, not the live IMD " "endpoint."
-                    if history.from_fallback
-                    else "Retrieved live."
-                )
-            ),
-        )
-
-
-def _mean_band(records: list[dict[str, Any]], band: str) -> float | None:
-    """Ensemble mean of one band across models, ignoring models that omitted it.
-
-    Returns ``None`` when no model reported the band, so the caller can raise
-    rather than silently treating a missing hazard as zero.
-    """
-    values = [
-        float(record[band])
-        for record in records
-        if record.get(band) is not None and isinstance(record[band], int | float)
-    ]
-    if not values:
-        return None
-    return statistics.fmean(values)

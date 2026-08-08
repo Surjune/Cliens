@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
-from app.core.config import Settings, load_settings_or_exit
+from app.core.config import Settings, get_settings, load_settings_or_exit
 from app.core.constants import validate_constants
 from app.core.database import dispose_database, init_database
 from app.core.exceptions import AppError, RateLimitExceededError
@@ -35,12 +35,22 @@ from app.core.logging import (
 from app.core.rate_limit import FixedWindowRateLimiter
 from app.external.http import close_client as close_http_client
 from app.ml.registry import try_load_registry
-from app.routes import climate, health, materials, reports, scoring, sites
+from app.routes import basemap, health, materials, reports, scoring
 from app.schemas.common import ErrorResponse
 
 logger = get_logger(__name__)
 
 API_PREFIX = "/api"
+
+# Path prefixes exempt from rate limiting.
+#
+# Map tiles belong here and their absence was a real bug: one screen of a slippy
+# map is twenty to forty tile requests, so a map view exhausted a 60-per-minute
+# budget in seconds. Worse, the budget is shared, so the exhausted limiter then
+# rejected `/score/districts` too and the whole page fell back to an error state
+# with no map at all. A tile is a cached static image, not an expensive call, so
+# throttling it protects nothing.
+RATE_LIMIT_EXEMPT_PREFIXES: tuple[str, ...] = (f"{API_PREFIX}/tiles/",)
 
 # Paths exempt from rate limiting. Health probes are polled continuously by
 # orchestrators and must never be throttled; the docs are static.
@@ -119,7 +129,8 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         """Check the budget, then either forward the request or reject it."""
-        if request.url.path in RATE_LIMIT_EXEMPT_PATHS:
+        path = request.url.path
+        if path in RATE_LIMIT_EXEMPT_PATHS or path.startswith(RATE_LIMIT_EXEMPT_PREFIXES):
             return await call_next(request)
 
         # Note: this trusts the socket peer address. Behind a reverse proxy the
@@ -296,9 +307,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     configure_logging(resolved)
 
     app = FastAPI(
-        title="Climate Lien Score API",
+        title="Building Quality Score API",
         version="0.1.0",
-        summary="Scores when a building site crosses an uninsurable climate risk threshold.",
+        summary="Scores how well building materials suit a district's measured climate.",
         lifespan=_build_lifespan(resolved),
         # The generated OpenAPI spec is the source of the frontend's types, so the
         # error envelope is declared globally rather than repeated per route.
@@ -330,14 +341,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.add_middleware(RateLimitMiddleware, limiter=limiter)
     app.add_middleware(CorrelationIdMiddleware)
 
+    # Dependencies resolve settings through `get_settings`, which reads the
+    # environment and caches. Without this override an app built with explicit
+    # settings would still hand its services the ambient ones — so a test could
+    # believe it had configured nothing while a client reached a real upstream.
+    app.dependency_overrides[get_settings] = lambda: resolved
+
     _register_exception_handlers(app)
 
     app.include_router(health.router, prefix=API_PREFIX)
-    app.include_router(sites.router, prefix=API_PREFIX)
-    app.include_router(climate.router, prefix=API_PREFIX)
     app.include_router(materials.router, prefix=API_PREFIX)
     app.include_router(scoring.router, prefix=API_PREFIX)
     app.include_router(reports.router, prefix=API_PREFIX)
+    app.include_router(basemap.router, prefix=API_PREFIX)
 
     return app
 

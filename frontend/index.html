@@ -2,12 +2,22 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Climate Lien Score</title>
+    <!-- maximum-scale/user-scalable: the page is a full-viewport map with its own
+         zoom. Letting the browser scale the document as well means a pinch grows
+         the search bar and panels while the map zooms underneath them. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"
+    />
+    <title>Building Quality Score</title>
     <meta
       name="description"
-      content="Estimate the year a building site crosses an uninsurable climate risk threshold, and how construction materials move that year."
+      content="Score a building specification against IS 456 using measured climate for your district, and see what to specify instead."
     />
+    <!-- Sets the browser's own UI (form controls, scrollbars) to match the dark
+         interface. Without it the native widgets render light on a dark page. -->
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#0b0e17" />
   </head>
   <body>
     <div id="root"></div>

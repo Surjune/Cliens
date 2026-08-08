@@ -163,6 +163,17 @@ KELVIN_TO_CELSIUS_OFFSET: Final[float] = 273.15
 # for liquid water. Multiplying by the seconds in a day gives mm/day.
 SECONDS_PER_DAY: Final[float] = 86_400.0
 
+# CODIFIED. ERA5 publishes total precipitation as a depth in metres.
+MM_PER_METRE: Final[float] = 1_000.0
+
+# LITERATURE. Coefficients of the August-Roche-Magnus saturation vapour pressure
+# approximation, in the refined form of Alduchov & Eskridge (1996), "Improved
+# Magnus Form Approximation of Saturation Vapor Pressure", Journal of Applied
+# Meteorology 35(4):601-609. Accurate to better than 0.4% over -40 to +50 C, which
+# covers every temperature this product encounters.
+MAGNUS_COEFFICIENT_A: Final[float] = 17.625
+MAGNUS_COEFFICIENT_B_C: Final[float] = 243.04
+
 # ---------------------------------------------------------------------------
 # Earth Engine datasets
 #
@@ -299,6 +310,201 @@ DAMAGE_MODEL_MIN_SAMPLES_LEAF: Final[int] = 5
 
 RANKER_MODEL_N_ESTIMATORS: Final[int] = 150
 RANKER_MODEL_MAX_DEPTH: Final[int] = 6
+
+# ---------------------------------------------------------------------------
+# IS 456 exposure classification
+#
+# IS 456 Table 3 defines exposure conditions in words ("exposed to severe rain",
+# "alternate wetting and drying", "sea water spray"). Turning a measured climate
+# record into one of those classes needs numeric thresholds, which the standard
+# does not supply. These are ours, chosen to match the wording, and are the main
+# judgement in the rules engine — listed in the README as such.
+# ---------------------------------------------------------------------------
+
+# CALIBRATED. Salt-laden air is the mechanism behind the "coastal" exposure
+# wording. Its influence is generally treated as reaching a few tens of kilometres
+# inland, so a site within this distance is classified as at least Severe.
+COASTAL_INFLUENCE_KM: Final[float] = 25.0
+
+# CALIBRATED. "Concrete surfaces exposed to sea water spray" implies effectively
+# shoreline proximity. Within this distance the class rises to Very Severe.
+DIRECT_SEA_SPRAY_KM: Final[float] = 1.0
+
+# CALIBRATED. Fraction of sampled hours that must be wet for the site to count as
+# a wet regime, satisfying "exposed to severe rain" on an exposed element.
+#
+# Expressed as an index rather than an annual depth because the GRIB accumulates
+# rainfall over a single hour at 00:00 UTC; deriving "mm per year" from that would
+# mean inventing the diurnal cycle. Every district is sampled identically, so the
+# index compares them faithfully. Set near the wetter end of the inland Tamil Nadu
+# districts observed in the 2016-2026 record.
+WET_REGIME_INDEX: Final[float] = 0.30
+
+# CALIBRATED. Sustained relative humidity at or above this level is the condition
+# under which reinforcement corrosion proceeds materially faster, which is what the
+# "severe condensation" wording is protecting against.
+HIGH_HUMIDITY_PERCENT: Final[float] = 75.0
+
+# CALIBRATED. A day is "wet" above this rainfall depth. Counting transitions
+# between wet and dry days is how "alternate wetting and drying" is measured.
+WET_DAY_RAINFALL_MM: Final[float] = 2.5
+
+# CALIBRATED. This many wet/dry transitions a year means the surface is cycling
+# often enough for the Severe wording to apply.
+WET_DRY_CYCLES_SEVERE_PER_YEAR: Final[float] = 60.0
+
+# ---------------------------------------------------------------------------
+# Building Quality Score
+#
+# CALIBRATED. The 0-100 score is defined by these weights, applied to the rules
+# engine's compliance margins. They are the product's own scale, not a published
+# one, and are stated as such wherever the score is shown.
+# ---------------------------------------------------------------------------
+# A fully compliant build starts here rather than at 100, leaving headroom so that
+# exceeding the minimums is visibly better than merely meeting them.
+COMPLIANT_BASE_SCORE: Final[float] = 78.0
+
+# Points per unit of fractional shortfall. Large enough that a materially
+# non-compliant build cannot reach a passing-looking score.
+SCORE_SHORTFALL_WEIGHT: Final[float] = 55.0
+
+# Points per unit of fractional headroom, and the cap on any single requirement's
+# contribution — over-specifying one parameter should not mask another's weakness.
+SCORE_HEADROOM_WEIGHT: Final[float] = 18.0
+SCORE_HEADROOM_CAP: Final[float] = 6.0
+
+# Awarded in proportion to how many applicable reference-table recommendations the
+# selection already follows.
+SCORE_RECOMMENDATION_WEIGHT: Final[float] = 10.0
+
+# CODIFIED. IS 1077 caps water absorption for common burnt clay brick at 20% by
+# weight; used as the reference against which a walling material's absorption
+# headroom is measured.
+REFERENCE_WATER_ABSORPTION_PERCENT: Final[float] = 20.0
+
+# CALIBRATED. Penalty applied when a walling material is used in a climate the
+# reference table warns against.
+WALLING_MISMATCH_PENALTY: Final[float] = -0.25
+
+# CALIBRATED. Margins the recommendation adds above each IS 456 minimum.
+# Specifying exactly at the limit leaves nothing for batching variation on site,
+# so the advice sits a little clear of it.
+RECOMMENDED_CEMENT_MARGIN_KG_M3: Final[float] = 20.0
+RECOMMENDED_WATER_CEMENT_MARGIN: Final[float] = 0.03
+
+# CALIBRATED. Score bands used for the plain-language verdict in the report.
+SCORE_BAND_THRESHOLDS: Final[tuple[tuple[str, float], ...]] = (
+    ("poor", 40.0),
+    ("marginal", 60.0),
+    ("adequate", 75.0),
+    ("good", 88.0),
+    ("excellent", 100.0),
+)
+
+# CODIFIED. The bundled ERA5 grid is 0.25 degrees, which is about 27 km at this
+# latitude. Published so the UI can cap a map or globe picker at a zoom that
+# matches it: every point inside one cell shares a single climate reading, and six
+# districts already resolve to the same node. Offering street-level zoom would
+# imply a per-building reading the data cannot support.
+CLIMATE_GRID_RESOLUTION_KM: Final[float] = 27.0
+
+# Mean Earth radius (IUGG), used to turn an angular separation into kilometres
+# when resolving a dropped pin to the nearest grid node.
+EARTH_MEAN_RADIUS_KM: Final[float] = 6371.0088
+
+# How far a dropped pin may sit from the nearest grid node and still be scored.
+#
+# The nodes are one grid cell apart, so any point genuinely inside the observed
+# region is within half a cell diagonal of one — 0.25 degrees square is about
+# 19 km corner-to-centre at this latitude. Rounding up to 30 km covers the coastal
+# nodes, whose cells are partly sea, without reaching a neighbouring region.
+#
+# This limit is the entire reason the pin cannot lie: nearest-node lookup alone
+# would happily return a Tamil Nadu district for a pin dropped in Brazil. Beyond
+# this distance the request is refused rather than answered with a number that
+# describes somewhere else.
+MAX_PIN_TO_GRID_DISTANCE_KM: Final[float] = 30.0
+
+# ---------------------------------------------------------------------------
+# Area selection and spatial interpolation
+# ---------------------------------------------------------------------------
+#
+# When a selected area contains no grid node, its climate is interpolated from
+# surrounding nodes. This is the one place interpolation is permitted, and only
+# under the conditions below — a value produced this way is always flagged so it is
+# never silently merged with a directly measured reading.
+#
+# How far a source node may be from the selected area's centre and still
+# contribute. Three grid cells. Beyond roughly this distance the Western Ghats and
+# the coastline change the regime enough that a neighbouring reading stops being
+# evidence about this location and becomes a guess dressed as one.
+MAX_INTERPOLATION_DISTANCE_KM: Final[float] = 85.0
+
+# Inverse-distance weighting exponent. Two is the standard choice for meteorological
+# fields: it falls off fast enough that a node three cells away barely competes with
+# one in the adjacent cell, without the near-discontinuity that higher powers give.
+INTERPOLATION_DISTANCE_POWER: Final[float] = 2.0
+
+# At most this many nodes contribute to one interpolated value. Averaging over the
+# whole region would flatten every location toward a regional mean, which reads as
+# confident and is worse than a coarse but local answer.
+MAX_INTERPOLATION_SOURCES: Final[int] = 4
+
+# Distance below which a node is treated as coincident with the query point, taken
+# directly instead of weighted. Prevents a division by zero and reflects that a
+# reading 100 m away is the reading.
+COINCIDENT_NODE_DISTANCE_KM: Final[float] = 0.1
+
+# ---------------------------------------------------------------------------
+# Basemap tiles and place search
+# ---------------------------------------------------------------------------
+#
+# JPEG quality for a composited map tile. Chosen by measurement rather than taste:
+# at 95 with chroma subsampling disabled, the mean error on label pixels of a real
+# tile was 7.6, against 17.7 at the more usual quality 92, for 5 KB more.
+TILE_IMAGE_QUALITY: Final[int] = 95
+
+# Chroma subsampling mode: 0 means 4:4:4, i.e. none.
+#
+# This is the single setting that decides whether place names are readable. The
+# tile is a photograph with thin coloured type drawn on top, and JPEG's default
+# 4:2:0 discards three quarters of the colour resolution — unnoticeable on
+# vegetation, ruinous for coloured glyph edges. WebP was tried as an alternative
+# and measured worse on text at every quality level, at a larger size.
+TILE_CHROMA_SUBSAMPLING: Final[int] = 0
+
+# Deepest zoom the tile endpoint will serve from the keyless Esri sources.
+#
+# Verified by probe: past this Esri returns a placeholder rather than photography.
+# At z19 one pixel is roughly 0.3 m at the equator — enough to see a building's
+# outline, not enough to read its roof.
+MAX_TILE_ZOOM_ESRI: Final[int] = 19
+
+# Deepest zoom when a Mapbox token is configured. Mapbox Satellite publishes to 22
+# in populated areas, roughly 0.04 m per pixel, which is the level at which roof
+# structure and individual trees resolve.
+MAX_TILE_ZOOM_MAPBOX: Final[int] = 22
+
+# The hard ceiling accepted by the route. The per-provider limit is enforced above
+# this, but the path parameter needs one fixed bound to validate against.
+MAX_TILE_ZOOM: Final[int] = MAX_TILE_ZOOM_MAPBOX
+
+# How long a composited tile stays in the process cache. Satellite basemaps change
+# on a scale of months, so this is about avoiding a repeat round trip while panning,
+# not about freshness.
+TILE_CACHE_SECONDS: Final[int] = 86_400
+
+# Composited tiles held in memory. At roughly 40 KB each this is a few tens of MB,
+# which buys smooth panning without growing without bound.
+TILE_CACHE_ENTRIES: Final[int] = 512
+
+# Nominatim's usage policy requires an identifying User-Agent naming the
+# application. Requests without one are refused.
+GEOCODER_USER_AGENT: Final[str] = "BuildingQualityScore/0.1 (climate-materials scoring tool)"
+
+# Matches returned by a place search. Enough to disambiguate a common place name
+# without turning the picker into a list to read.
+GEOCODER_RESULT_LIMIT: Final[int] = 6
 
 # ---------------------------------------------------------------------------
 # Rate limiting
