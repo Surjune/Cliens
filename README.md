@@ -21,7 +21,7 @@ Built by **Team Zenovators** for the **Tech For Good (Build with AI)** hackathon
 
 ### Overall Architecture
 
-![CLIENS — Overall Architecture](https://github.com/Build-with-AI-Code-for-Communities/cities-team-263-zenovators/blob/bcf6c3bd9f5c70bde76b71b7c9d23185c7c81187/bf6c3464-b8a6-4093-9861-884f3f90e3f0.jpeg)
+![CLIENS — Overall Architecture](https://github.com/Build-with-AI-Code-for-Communities/cities-team-263-zenovators/blob/bcf6c3bd9f5c70bde76b71b7c9d23185c7c81187/b63959fd-9edb-4687-b20d-180738466d70.jpeg)
 
 ---
 
@@ -31,12 +31,12 @@ Built by **Team Zenovators** for the **Tech For Good (Build with AI)** hackathon
 **Hackathon:** Tech For Good — Build with AI
 **Repository:** https://github.com/Build-with-AI-Code-for-Communities/cities-team-263-zenovators
 
-| Name | Role |
+| Name |
 | --- | --- |
-| **Naveen** | *[role]* |
-| **[Member 2]** | *[role]* |
-| **[Member 3]** | *[role]* |
-| **[Member 4]** | *[role]* |
+| **Naveen** |
+| **Suman** | 
+| **Surjune** | 
+| **Gowdham Karthik** | 
 
 ---
 
