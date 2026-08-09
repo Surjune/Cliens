@@ -15,13 +15,14 @@ Built by **Team Zenovators** for the **Tech For Good (Build with AI)** hackathon
 
 ## Architecture
 
+### Overall Architecture
+
+![CLIENS — Overall Architecture](https://github.com/Build-with-AI-Code-for-Communities/cities-team-263-zenovators/blob/d9568be7a601ff8ac2262ac369a9db5dbadfd279/ChatGPT%20Image%20Aug%209%2C%202026%2C%2002_52_33%20PM.png)
+
 ### Cloud Architecture
 
 ![CLIENS — Cloud Architecture](https://github.com/Build-with-AI-Code-for-Communities/cities-team-263-zenovators/blob/bcf6c3bd9f5c70bde76b71b7c9d23185c7c81187/bf6c3464-b8a6-4093-9861-884f3f90e3f0.jpeg)
 
-### Overall Architecture
-
-![CLIENS — Overall Architecture](https://github.com/Build-with-AI-Code-for-Communities/cities-team-263-zenovators/blob/bcf6c3bd9f5c70bde76b71b7c9d23185c7c81187/b63959fd-9edb-4687-b20d-180738466d70.jpeg)
 
 ---
 
