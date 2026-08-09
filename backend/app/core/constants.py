@@ -578,3 +578,97 @@ def validate_constants() -> None:
 
     if not MIN_DAMAGE_RATIO < UNINSURABLE_DAMAGE_RATIO < MAX_DAMAGE_RATIO:
         raise ValueError("UNINSURABLE_DAMAGE_RATIO must lie strictly within the damage range")
+
+
+# ---------------------------------------------------------------------------
+# Sarvam AI text-to-speech
+# ---------------------------------------------------------------------------
+#
+# The model to synthesise with. Its speaker list is NOT the same as the general
+# list in Sarvam's docs — `anushka`, which the docs show prominently, is rejected
+# by this model. Verified live: kavitha, shruti, ritu, roopa, anand, vijay all
+# work for ta-IN.
+SARVAM_TTS_MODEL: Final[str] = "bulbul:v3"
+
+SARVAM_TTS_ENDPOINT: Final[str] = "https://api.sarvam.ai/text-to-speech"
+
+# Hard limit the REST endpoint enforces, confirmed by its own validation error.
+# Narrating a question plus every option routinely exceeds it, so text is split
+# into chunks below this and the pieces are played back-to-back.
+SARVAM_MAX_TEXT_CHARACTERS: Final[int] = 2500
+
+# Leaves room for the sentence-boundary search when chunking, so a split never
+# lands mid-word and never overshoots the hard limit above.
+SARVAM_CHUNK_TARGET_CHARACTERS: Final[int] = 1800
+
+# HTTP statuses that mean "this key is spent", as opposed to a bad request. 429 is
+# the documented rate limit; 402 and 403 cover an exhausted plan or a revoked key.
+# Anything else is a fault in our request and retrying on another key would only
+# produce the same error twice.
+SARVAM_KEY_EXHAUSTED_STATUSES: Final[frozenset[int]] = frozenset({402, 403, 429})
+
+# Synthesised audio held in memory, keyed by the hash of text, speaker and
+# language. Narration is a small fixed set of questions, so this reaches a steady
+# state quickly and makes every repeat visit free and instant.
+VOICE_CACHE_ENTRIES: Final[int] = 256
+
+# ---------------------------------------------------------------------------
+# Estimated service life
+#
+# What this is, and what it is not. There is no dataset of "this building was
+# specified like that and lasted N years", so nothing here is fitted to observed
+# survival. This is a code-anchored estimate: it starts from the design life the
+# IS 456 durability provisions are written to deliver, and adjusts it by how far
+# the proposed mix sits from those provisions, using the established physics of
+# how deterioration actually proceeds. It answers "how does this specification
+# compare to the one the code says lasts 50 years", not "when will this fall
+# down". The API returns it as a range for that reason.
+# ---------------------------------------------------------------------------
+
+# CODIFIED. IS 456:2000 clause 8 and Table 5 set minimum grade, minimum cement
+# content and maximum water/cement ratio per exposure class. Those provisions are
+# written to deliver a design service life of 50 years for ordinary structures,
+# which is also the figure IS 456's own durability commentary and the National
+# Building Code work to. A specification sitting exactly on the class minimums
+# therefore scores exactly this.
+DESIGN_SERVICE_LIFE_YEARS: Final[float] = 50.0
+
+# LITERATURE. Reinforcement corrosion dominates the deterioration of RC in these
+# exposures, and its onset is governed by chloride and CO2 ingress, which is
+# diffusion-controlled. The apparent diffusion coefficient rises steeply and
+# approximately exponentially with the water/cement ratio, because the capillary
+# pore network that carries the ions is what excess water leaves behind.
+#
+# fib Bulletin 34 (Model Code for Service Life Design, 2006) and Papadakis,
+# Vayenas & Fardis (1991), "Physical and chemical characteristics affecting the
+# durability of concrete", ACI Materials Journal 88(2), both express the
+# relationship in this form. Published exponents span roughly 5 to 9; 6.0 is at
+# the conservative end, so an improvement in w/c buys less extra life here than
+# the middle of that range would claim.
+INGRESS_WATER_CEMENT_SENSITIVITY: Final[float] = 6.0
+
+# CALIBRATED. Bounds on the estimate.
+#
+# The lower bound is not "the building falls down at 5 years" — it is the point
+# below which this model stops discriminating usefully, because a mix that bad
+# fails on workmanship and structural grounds long before diffusion physics is
+# the binding constraint. The upper bound exists because past roughly a century
+# the limit on a building's life stops being the concrete and becomes the
+# foundation, the seismic standard it was built to, and whether anyone maintains
+# it — none of which this model sees.
+MIN_ESTIMATED_SERVICE_LIFE_YEARS: Final[float] = 5.0
+MAX_ESTIMATED_SERVICE_LIFE_YEARS: Final[float] = 100.0
+
+# CALIBRATED. Falling short of the minimum grade or cement content means the
+# concrete does not meet the assumptions the 50-year target rests on — cover
+# quality, binder available to bind chlorides, permeability. This is the fraction
+# of service life lost per unit of relative shortfall on those parameters, taking
+# the worst one rather than compounding them, because the weakest link governs.
+SERVICE_LIFE_SHORTFALL_PENALTY: Final[float] = 1.5
+
+# CALIBRATED. Service life models of this kind carry large scatter — real
+# structures with identical specifications differ by decades depending on
+# workmanship, curing and cover accuracy. Reporting a single year would imply a
+# precision this cannot support, so the API returns this fractional band either
+# side and the interface shows the range.
+SERVICE_LIFE_UNCERTAINTY_FRACTION: Final[float] = 0.30

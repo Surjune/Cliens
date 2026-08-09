@@ -6,12 +6,12 @@
  * Its camera orbits a sphere, so at building scale the ground shears under the
  * cursor and the near clipping plane starts eating the mesh. A slippy map has none
  * of those problems: it is the projection tile pyramids were designed for, so it
- * zooms to the deepest published level cleanly and a dragged rectangle lands
- * exactly where the pointer went.
+ * zooms to the deepest published level cleanly and a plotted corner lands exactly
+ * where the pointer was when it was clicked.
  *
  * So the globe owns exploration and this owns detail. The handover is automatic —
  * see `LocationPage` — and both feed the same boundary handler, so the step after
- * cannot tell which one drew the box.
+ * cannot tell which one drew the outline.
  *
  * TILES COME STRAIGHT FROM THE PROVIDER, NOT THROUGH OUR API
  * The globe has to use our compositing endpoint because it paints a single image
@@ -25,7 +25,7 @@
  * Leaflet's prefetching, none of which the proxy could offer.
  *
  * Leaflet is driven directly rather than through react-leaflet's components. The
- * rectangle interaction needs raw map events and temporary control of dragging,
+ * outline interaction needs raw map events and temporary control of dragging,
  * which is more awkward to express through the declarative wrapper than through
  * the imperative API it wraps.
  */
@@ -33,7 +33,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useEffect, useRef, useState } from 'react';
 
-import type { DrawnArea } from '@/components/globe/DistrictGlobe';
+import type { LatLon } from '@/lib/geo';
 
 /** Below this the globe is the better view; at or above it, this one is. */
 export const MAP_HANDOVER_ZOOM = 12;
@@ -56,12 +56,24 @@ const ESRI_LABELS = `${ESRI_BASE}/Reference/World_Boundaries_and_Places/MapServe
 const ESRI_CLARITY =
   'https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
+/**
+ * How close, in pixels, a click must land to the first vertex to close the ring.
+ *
+ * Measured in screen space rather than degrees: what matters is whether the user
+ * was aiming at the marker they can see, and that target is the same size on
+ * screen at every zoom level.
+ */
+const CLOSE_RING_PIXELS = 14;
+
+const OUTLINE_COLOUR = '#7cc7f0';
+
 export function SiteMap({
   centre,
   zoom,
-  area,
+  outline,
   drawing,
   onDraw,
+  onPreview,
   onZoomOut,
   maxZoom,
   attribution,
@@ -70,9 +82,16 @@ export function SiteMap({
 }: {
   centre: { latitude: number; longitude: number };
   zoom: number;
-  area: DrawnArea | null;
+  /** The committed site outline, if one has been drawn. */
+  outline: readonly LatLon[] | null;
   drawing: boolean;
-  onDraw: (area: DrawnArea) => void;
+  onDraw: (outline: LatLon[]) => void;
+  /**
+   * Fired on every vertex placed and every move, and with `null` once the outline
+   * is committed or cancelled — mirrors `DistrictGlobe`'s prop of the same name
+   * so the page can treat both renderers identically.
+   */
+  onPreview?: ((outline: readonly LatLon[] | null) => void) | undefined;
   /** Fired when the user zooms back out far enough to want the globe again. */
   onZoomOut: (centre: { latitude: number; longitude: number }) => void;
   maxZoom: number;
@@ -90,8 +109,9 @@ export function SiteMap({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<L.Map | null>(null);
-  const rectRef = useRef<L.Rectangle | null>(null);
-  const anchorRef = useRef<L.LatLng | null>(null);
+  const shapeRef = useRef<L.Polygon | null>(null);
+  /** Vertices placed so far in the outline currently being drawn. */
+  const verticesRef = useRef<L.LatLng[]>([]);
   const [ready, setReady] = useState(false);
 
   // Created once. Centre and zoom changes are applied through the effects below
@@ -229,32 +249,36 @@ export function SiteMap({
     map.setZoom(map.getZoom() + zoomCommand.delta);
   }, [zoomCommand, ready]);
 
-  // Draw the committed boundary, replacing any previous one.
+  // Draw the committed outline, replacing any previous one.
   useEffect(() => {
     const map = mapRef.current;
     if (map === null || !ready) {
       return;
     }
-    if (rectRef.current !== null) {
-      rectRef.current.remove();
-      rectRef.current = null;
+    if (shapeRef.current !== null) {
+      shapeRef.current.remove();
+      shapeRef.current = null;
     }
-    if (area !== null) {
-      rectRef.current = L.rectangle(
-        [
-          [area.south, area.west],
-          [area.north, area.east],
-        ],
-        { color: '#7cc7f0', weight: 2, fillOpacity: 0.15 }
+    if (outline !== null && outline.length >= 3) {
+      shapeRef.current = L.polygon(
+        outline.map((vertex) => [vertex.latitude, vertex.longitude] as [number, number]),
+        { color: OUTLINE_COLOUR, weight: 2, fillOpacity: 0.15 }
       ).addTo(map);
     }
-  }, [area, ready]);
+  }, [outline, ready]);
 
   /**
-   * Rectangle drawing.
+   * Outline plotting: click each corner in turn, then click the first vertex
+   * again — or press Enter — to close the shape.
    *
-   * Dragging is disabled for the duration so the same gesture cannot both pan the
-   * map and draw on it. Leaflet gives latitude and longitude directly, so unlike
+   * A polygon rather than a rectangle because real plots are rarely square, and a
+   * box around a triangular corner plot claims roughly double its true area. That
+   * inflated figure would then be what the user is told their site measures.
+   *
+   * Panning is disabled for as long as drawing is armed, not just mid-outline. A
+   * pan between two clicks would put the next vertex somewhere other than where
+   * the user was looking when they clicked it — the same reasoning that freezes
+   * the globe's rotation. Leaflet gives latitude and longitude directly, so unlike
    * the globe there is no ray-to-sphere step that can miss.
    */
   useEffect(() => {
@@ -266,69 +290,153 @@ export function SiteMap({
     if (!drawing) {
       map.dragging.enable();
       map.getContainer().style.cursor = '';
+      verticesRef.current = [];
       return;
     }
 
     map.dragging.disable();
     map.getContainer().style.cursor = 'crosshair';
 
-    let preview: L.Rectangle | null = null;
+    // The edges placed so far, the rubber-band edge following the cursor, and a
+    // handle on each placed vertex. Separate layers so the committed part of the
+    // outline stays solid while only the last edge tracks the pointer.
+    let placedLine: L.Polyline | null = null;
+    let rubberBand: L.Polyline | null = null;
+    let handles: L.CircleMarker[] = [];
 
-    const bounds = (a: L.LatLng, b: L.LatLng): L.LatLngBounds =>
-      L.latLngBounds(a, b);
+    const toLatLon = (points: L.LatLng[]): LatLon[] =>
+      points.map((point) => ({ latitude: point.lat, longitude: point.lng }));
 
-    const onDown = (event: L.LeafletMouseEvent) => {
-      anchorRef.current = event.latlng;
-      preview = L.rectangle(bounds(event.latlng, event.latlng), {
-        color: '#7cc7f0',
-        weight: 2,
-        dashArray: '5,5',
-        fillOpacity: 0.08,
-      }).addTo(map);
+    const clearScratch = () => {
+      placedLine?.remove();
+      rubberBand?.remove();
+      handles.forEach((handle) => {
+        handle.remove();
+      });
+      placedLine = null;
+      rubberBand = null;
+      handles = [];
+    };
+
+    const cancelPending = () => {
+      verticesRef.current = [];
+      clearScratch();
+      onPreview?.(null);
+    };
+
+    const redraw = () => {
+      const vertices = verticesRef.current;
+      clearScratch();
+      if (vertices.length === 0) {
+        return;
+      }
+
+      if (vertices.length >= 2) {
+        placedLine = L.polyline(vertices, {
+          color: OUTLINE_COLOUR,
+          weight: 2,
+        }).addTo(map);
+      }
+
+      handles = vertices.map((vertex, index) =>
+        L.circleMarker(vertex, {
+          // The first handle is the one you click to close, so it is drawn larger
+          // and filled — it is a target, not just a record of where you clicked.
+          radius: index === 0 ? 6 : 4,
+          color: OUTLINE_COLOUR,
+          fillColor: index === 0 ? OUTLINE_COLOUR : '#05070f',
+          fillOpacity: 1,
+          weight: 2,
+        }).addTo(map)
+      );
+    };
+
+    const commit = () => {
+      const vertices = verticesRef.current;
+      // Fewer than three points is a line, not a plot. The backend rejects it
+      // too, but there is no reason to make a round trip to find that out.
+      if (vertices.length < 3) {
+        return;
+      }
+      const finished = toLatLon(vertices);
+      cancelPending();
+      onDraw(finished);
     };
 
     const onMove = (event: L.LeafletMouseEvent) => {
-      if (anchorRef.current === null || preview === null) {
+      const vertices = verticesRef.current;
+      if (vertices.length === 0) {
         return;
       }
-      preview.setBounds(bounds(anchorRef.current, event.latlng));
-    };
-
-    const onUp = (event: L.LeafletMouseEvent) => {
-      const anchor = anchorRef.current;
-      anchorRef.current = null;
-      if (preview !== null) {
-        preview.remove();
-        preview = null;
-      }
-      if (anchor === null) {
+      const last = vertices[vertices.length - 1];
+      if (last === undefined) {
         return;
       }
 
-      const box = bounds(anchor, event.latlng);
-      const south = box.getSouth();
-      const north = box.getNorth();
-      const west = box.getWest();
-      const east = box.getEast();
-      // A click rather than a drag. The API rejects a degenerate rectangle, so it
-      // is discarded here instead of being sent.
-      if (north > south && east > west) {
-        onDraw({ south, north, west, east });
+      rubberBand?.remove();
+      rubberBand = L.polyline([last, event.latlng], {
+        color: OUTLINE_COLOUR,
+        weight: 2,
+        dashArray: '5,5',
+        opacity: 0.8,
+      }).addTo(map);
+
+      // The live figure includes the point under the cursor, so the area shown is
+      // the area of the shape as it currently looks.
+      onPreview?.(toLatLon([...vertices, event.latlng]));
+    };
+
+    const onClick = (event: L.LeafletMouseEvent) => {
+      const vertices = verticesRef.current;
+      const first = vertices[0];
+
+      if (first !== undefined && vertices.length >= 3) {
+        const firstPixel = map.latLngToContainerPoint(first);
+        const clickPixel = map.latLngToContainerPoint(event.latlng);
+        if (firstPixel.distanceTo(clickPixel) <= CLOSE_RING_PIXELS) {
+          commit();
+          return;
+        }
+      }
+
+      verticesRef.current = [...vertices, event.latlng];
+      redraw();
+      onPreview?.(toLatLon(verticesRef.current));
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        cancelPending();
+        return;
+      }
+      if (event.key === 'Enter') {
+        commit();
+        return;
+      }
+      // Undo the last vertex rather than the whole outline: a misplaced corner
+      // five clicks in should not cost the other four.
+      if (event.key === 'Backspace' && verticesRef.current.length > 0) {
+        event.preventDefault();
+        verticesRef.current = verticesRef.current.slice(0, -1);
+        redraw();
+        onPreview?.(
+          verticesRef.current.length === 0 ? null : toLatLon(verticesRef.current)
+        );
       }
     };
 
-    map.on('mousedown', onDown);
     map.on('mousemove', onMove);
-    map.on('mouseup', onUp);
+    map.on('click', onClick);
+    window.addEventListener('keydown', onKeyDown);
     return () => {
-      map.off('mousedown', onDown);
       map.off('mousemove', onMove);
-      map.off('mouseup', onUp);
-      preview?.remove();
+      map.off('click', onClick);
+      window.removeEventListener('keydown', onKeyDown);
+      cancelPending();
       map.dragging.enable();
       map.getContainer().style.cursor = '';
     };
-  }, [drawing, ready, onDraw]);
+  }, [drawing, ready, onDraw, onPreview]);
 
   // `bg-void` rather than Leaflet's default light grey: an unloaded tile should
   // read as part of this interface, not as a broken page.

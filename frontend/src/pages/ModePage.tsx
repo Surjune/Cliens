@@ -9,12 +9,16 @@
 import { useNavigate } from 'react-router-dom';
 
 import { PageShell } from '@/components/Shell';
+import { VoiceExplainer } from '@/components/VoiceExplainer';
+import { buildNarration, TA } from '@/lib/narration.ta';
+import { useVoice } from '@/state/voice-context';
 import { Button } from '@/components/ui';
 import { useSession } from '@/state/session-context';
 
 export default function ModePage() {
   const { spec, update } = useSession();
   const navigate = useNavigate();
+  const voice = useVoice();
 
   const choose = (evaluateOwnMaterials: boolean) => {
     update({ evaluateOwnMaterials });
@@ -29,6 +33,12 @@ export default function ModePage() {
       lead="Both answers use the same measured climate and the same code checks. The difference is only what gets compared against the recommendation."
       wide
     >
+      <VoiceExplainer
+        text={buildNarration(TA.mode.question, TA.mode.options)}
+        enabled={voice.enabled}
+        className="mb-4"
+      />
+
       <div className="grid gap-4 sm:grid-cols-2">
         <ModeCard
           badge="Check"

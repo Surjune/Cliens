@@ -79,6 +79,25 @@ class RecommendationResponse(SchemaBase):
     followed: bool = Field(description="Whether the selection already satisfies this.")
 
 
+class ServiceLifeResponse(SchemaBase):
+    """How long this specification implies the concrete will serve.
+
+    Anchored on the design life IS 456's durability provisions are written to
+    deliver, then adjusted by how far the mix sits from those provisions. It is
+    not a prediction fitted to observed failures — no such dataset exists for this
+    — which is why a range is returned rather than a single year, and why
+    ``basis`` travels with it rather than living only in the documentation.
+    """
+
+    years: float = Field(description="Point estimate, in years.")
+    lower_years: float = Field(description="Lower bound of the plausible band.")
+    upper_years: float = Field(description="Upper bound of the plausible band.")
+    baseline_years: float = Field(
+        description="The design life a specification meeting the code exactly would give."
+    )
+    basis: str = Field(description="One line stating what the estimate is derived from.")
+
+
 class ScoredSelectionResponse(SchemaBase):
     """One specification, scored and explained."""
 
@@ -91,6 +110,7 @@ class ScoredSelectionResponse(SchemaBase):
     band: ScoreBand
     compliant: bool
     findings: tuple[ComplianceFindingResponse, ...]
+    service_life: ServiceLifeResponse
 
 
 class ClimateProfileResponse(SchemaBase):

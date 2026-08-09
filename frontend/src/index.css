@@ -42,8 +42,12 @@
   --color-band-good: oklch(0.75 0.14 158);
   --color-band-excellent: oklch(0.80 0.13 185);
 
+  /* Space Grotesk, loaded in index.html. The fallback stack still matters even
+     though it should always load: it is what a blocked font request or a
+     first, pre-swap paint actually renders in. */
   --font-sans:
-    'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+    'Space Grotesk', 'Inter var', 'Inter', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', sans-serif;
   /* Numbers are the product. They get their own face so a score never reads as
      prose, and so columns of figures align without extra work. */
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'Consolas', monospace;
@@ -79,6 +83,18 @@ body {
   /* The globe fills the viewport; the page must never bounce behind it. */
   overscroll-behavior: none;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Chrome that floats directly on the map, with no panel behind it.
+
+   A backdrop would crop the imagery the page exists to show, but satellite tiles
+   are arbitrary — a plot can sit on dark scrub or a white rooftop — so no fixed
+   text colour is safe on its own. A soft dark shadow costs no pixels and keeps
+   light text readable over both. */
+.map-chrome {
+  text-shadow:
+    0 1px 3px oklch(0 0 0 / 0.85),
+    0 0 12px oklch(0 0 0 / 0.55);
 }
 
 /* Scores are compared column to column, so their digits must line up. */

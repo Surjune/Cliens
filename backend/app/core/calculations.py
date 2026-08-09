@@ -473,6 +473,88 @@ def confidence_interval(point_estimate: float, standard_error: float) -> tuple[f
 
 
 # ---------------------------------------------------------------------------
+# Estimated service life
+# ---------------------------------------------------------------------------
+def estimated_service_life_years(
+    *,
+    required_water_cement_ratio: float,
+    provided_water_cement_ratio: float,
+    worst_other_shortfall_ratio: float,
+) -> float:
+    """Years of service life this specification implies, from the code's baseline.
+
+    Anchored at ``DESIGN_SERVICE_LIFE_YEARS``: a mix sitting exactly on its
+    exposure class's limits returns exactly that, because those limits are what
+    the 50-year target is written to deliver.
+
+    Two adjustments move it from there:
+
+    * The water/cement term. Corrosion onset is diffusion-controlled and the
+      diffusion coefficient rises exponentially with w/c, so life scales as
+      ``exp(k * (required - provided))``. Beating the limit buys time; exceeding
+      it loses time, and steeply.
+    * The shortfall term. Missing the minimum grade or cement content means the
+      concrete does not meet the assumptions behind that target at all, so a
+      further proportional reduction applies. Only the worst of those parameters
+      counts — deficiencies here are not independent, and multiplying them would
+      compound the same underlying problem twice.
+
+    Args:
+        required_water_cement_ratio: The exposure class maximum.
+        provided_water_cement_ratio: What the specification proposes.
+        worst_other_shortfall_ratio: How far the worst of the *other* durability
+            parameters falls below its minimum, as a non-negative fraction of
+            that minimum. Zero when everything else complies.
+
+    Returns:
+        Years, clamped to the bounds in ``constants``.
+    """
+    diffusion_factor = math.exp(
+        constants.INGRESS_WATER_CEMENT_SENSITIVITY
+        * (required_water_cement_ratio - provided_water_cement_ratio)
+    )
+
+    # clamp: a shortfall worse than the penalty can absorb would otherwise drive
+    # the factor negative and flip the sign of the estimate.
+    shortfall_factor = clamp(
+        1.0 - constants.SERVICE_LIFE_SHORTFALL_PENALTY * max(worst_other_shortfall_ratio, 0.0),
+        0.0,
+        1.0,
+    )
+
+    years = constants.DESIGN_SERVICE_LIFE_YEARS * diffusion_factor * shortfall_factor
+    return clamp(
+        years,
+        constants.MIN_ESTIMATED_SERVICE_LIFE_YEARS,
+        constants.MAX_ESTIMATED_SERVICE_LIFE_YEARS,
+    )
+
+
+def service_life_interval(years: float) -> tuple[float, float]:
+    """The plausible band around a service life estimate.
+
+    Returned alongside the point value because a single year would imply a
+    precision this model cannot support: two structures built to identical
+    specifications diverge by decades on workmanship and cover accuracy alone.
+    Bounded by the same limits as the estimate, so the band never extends past
+    where the model stops meaning anything.
+    """
+    spread = years * constants.SERVICE_LIFE_UNCERTAINTY_FRACTION
+    return (
+        clamp(
+            years - spread,
+            constants.MIN_ESTIMATED_SERVICE_LIFE_YEARS,
+            constants.MAX_ESTIMATED_SERVICE_LIFE_YEARS,
+        ),
+        clamp(
+            years + spread,
+            constants.MIN_ESTIMATED_SERVICE_LIFE_YEARS,
+            constants.MAX_ESTIMATED_SERVICE_LIFE_YEARS,
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Geodesy
 # ---------------------------------------------------------------------------
 def haversine_km(

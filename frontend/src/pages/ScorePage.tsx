@@ -10,13 +10,18 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { PageShell } from '@/components/Shell';
+import { VoiceExplainer } from '@/components/VoiceExplainer';
+import { scoreNarration } from '@/lib/narration.ta';
+import { useVoice } from '@/state/voice-context';
 import { ScoreComparison } from '@/components/ScoreComparison';
+import { ServiceLifeComparison } from '@/components/ServiceLifeComparison';
 import { Button, ErrorNotice, Panel, Popup, Spinner } from '@/components/ui';
 import { useAction } from '@/hooks/useAction';
 import { apiClient } from '@/lib/api-client';
 import { formatParameter, formatPercent } from '@/lib/format';
+import { boundsOf } from '@/lib/geo';
 import { useSession, type SiteSpecification } from '@/state/session-context';
-import type { ClimateProvenance, MaterialSelectionInput, ScoreResponse } from '@/types/api';
+import type { MaterialSelectionInput, ScoreResponse } from '@/types/api';
 
 /**
  * The materials payload, or null.
@@ -41,18 +46,35 @@ export default function ScorePage() {
   const [result, setResult] = useState<ScoreResponse | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [climateOpen, setClimateOpen] = useState(false);
+  const voice = useVoice();
 
-  const report = useAction(apiClient.downloadReport.bind(apiClient));
+  // Two report endpoints for the same reason there are two score endpoints: a
+  // drawn outline has no district name, and the district report requires one.
+  const report = useAction(
+    async (): Promise<Blob> => {
+      const outlineBounds = area === null ? null : boundsOf(area);
+      return outlineBounds !== null
+        ? apiClient.downloadAreaReport(outlineBounds, materialsPayload(spec), spec.situation)
+        : apiClient.downloadReport(spec.district, materialsPayload(spec), spec.situation);
+    }
+  );
 
   useEffect(() => {
     let cancelled = false;
     setResult(null);
     setError(null);
-    // A drawn boundary and a named district are different endpoints, because only
+    // A drawn outline and a named district are different endpoints, because only
     // the area one can report whether its climate was interpolated.
+    //
+    // The climate lookup takes the outline's bounding box rather than the outline
+    // itself. That is not a shortcut: the grid resolves to 27 km cells, so the
+    // difference between a plot and the box around it is orders of magnitude
+    // below what the data can distinguish. The *area* uses the real outline,
+    // because there the difference is the entire point.
+    const outlineBounds = area === null ? null : boundsOf(area);
     const pending =
-      area !== null
-        ? apiClient.scoreArea(area, materialsPayload(spec), spec.situation)
+      outlineBounds !== null
+        ? apiClient.scoreArea(outlineBounds, materialsPayload(spec), spec.situation)
         : apiClient.score(spec.district, materialsPayload(spec), spec.situation);
 
     pending
@@ -72,7 +94,7 @@ export default function ScorePage() {
   }, [spec, area]);
 
   const handleDownload = useCallback(async () => {
-    const blob = await report.run(spec.district, materialsPayload(spec), spec.situation);
+    const blob = await report.run();
     if (blob === null) {
       return;
     }
@@ -81,15 +103,21 @@ export default function ScorePage() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.href = url;
-    anchor.download = `building-quality-score-${spec.district.toLowerCase()}.pdf`;
+    // Named from what was actually scored, since a drawn outline has no district.
+    anchor.download = `building-quality-score-${(result?.district ?? 'site')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '')}.pdf`;
     anchor.click();
     URL.revokeObjectURL(url);
-  }, [spec, report]);
+  }, [report, result]);
 
   return (
     <PageShell
       eyebrow="Step 5 of 5"
-      title={`${spec.district}, scored`}
+      // `result.district` rather than `spec.district`: a drawn outline has no
+      // district name of its own, and the server names what it actually scored.
+      title={result === null ? 'Scoring…' : `${result.district}, scored`}
       lead={
         result === null
           ? undefined
@@ -119,16 +147,31 @@ export default function ScorePage() {
 
       {result !== null && (
         <div className="space-y-6">
-          {/* Placed above the score, not below it. An interpolated reading must
-              qualify the number before it is read, not footnote it afterwards. */}
-          {result.climate_provenance != null && (
-            <ProvenanceNotice provenance={result.climate_provenance} />
-          )}
+          {/* Built from the live response, not a fixed script, so the spoken
+              numbers can never drift from the ones on screen. */}
+          <VoiceExplainer
+            text={scoreNarration({
+              district: result.district,
+              exposureLabel: result.exposure_label,
+              proposed: result.proposed.score,
+              recommended: result.recommended.score,
+              improvement: result.improvement,
+              compliant: result.proposed.compliant,
+            })}
+            enabled={voice.enabled}
+            label="முடிவைக் கேளுங்கள்"
+          />
 
           <ScoreComparison
             proposed={result.proposed}
             recommended={result.recommended}
             improvement={result.improvement}
+            evaluatedOwnMaterials={spec.evaluateOwnMaterials}
+          />
+
+          <ServiceLifeComparison
+            proposed={result.proposed}
+            recommended={result.recommended}
             evaluatedOwnMaterials={spec.evaluateOwnMaterials}
           />
 
@@ -182,9 +225,27 @@ export default function ScorePage() {
                         reduced === true ? { duration: 0 } : { delay: 0.05 * index, duration: 0.3 }
                       }
                     >
-                      <td className="py-2.5 text-ink-1">{formatParameter(finding.parameter)}</td>
-                      <td className="tabular py-2.5 text-right text-ink-2">{finding.required}</td>
-                      <td className="tabular py-2.5 text-right text-ink-2">{finding.provided}</td>
+                      <td className="py-2.5 text-ink-1">
+                        {formatParameter(finding.parameter)}
+                        {!isSpecComparison(finding.parameter) && (
+                          // This row is not a spec-versus-limit comparison, so the
+                          // numeric columns are blank and the reason goes here
+                          // instead — see `isSpecComparison`.
+                          <span className="mt-0.5 block text-xs text-ink-3">
+                            {finding.message}
+                          </span>
+                        )}
+                      </td>
+                      <td className="tabular py-2.5 text-right text-ink-2">
+                        {isSpecComparison(finding.parameter)
+                          ? formatFindingValue(finding.required)
+                          : '—'}
+                      </td>
+                      <td className="tabular py-2.5 text-right text-ink-2">
+                        {isSpecComparison(finding.parameter)
+                          ? formatFindingValue(finding.provided)
+                          : '—'}
+                      </td>
                       <td
                         className={`py-2.5 text-right font-semibold ${
                           finding.compliant ? 'text-band-good' : 'text-band-poor'
@@ -294,7 +355,19 @@ export default function ScorePage() {
                 value={`${result.climate.wet_dry_cycles_per_year.toFixed(0)} /yr`}
               />
             </dl>
-            <p className="mt-6 border-t border-white/10 pt-4 text-xs leading-relaxed text-ink-3">
+            {/* Kept here rather than as a banner over the score: it belongs with
+                the measurements it qualifies, and a reader who opens this panel is
+                already asking where the numbers came from. */}
+            {result.climate_provenance?.interpolated === true && (
+              <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-relaxed text-ink-3">
+                No measured cell falls inside your boundary, so these figures were
+                interpolated from the nearest measured cells —{' '}
+                {result.climate_provenance.source_districts.join(', ')} — the closest{' '}
+                {result.climate_provenance.nearest_source_km.toFixed(0)} km away.
+              </p>
+            )}
+
+            <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-relaxed text-ink-3">
               Observed {result.data_source['observation_start'] ?? '—'} to{' '}
               {result.data_source['observation_end'] ?? '—'}. Wet hours is the fraction
               of sampled hours with rainfall, used instead of an annual total because
@@ -309,43 +382,29 @@ export default function ScorePage() {
 }
 
 /**
- * Says how the climate behind an area score was arrived at.
+ * Whether a finding's `required`/`provided` really are "the limit" and "what you
+ * specified".
  *
- * Two genuinely different statements, not one hedge: a boundary containing measured
- * cells gets a plain confirmation, while one that fell between cells is explicitly
- * marked as derived and names the cells it was derived from. Collapsing these into a
- * single vague caveat would make the honest case look doubtful and the derived case
- * look measured.
+ * For grade, cement content and water/cement ratio they are. The walling check is
+ * different: it reports the *climate's* humidity against the threshold at which
+ * corrosion accelerates, and decides compliance from whether the chosen material
+ * suits that climate. Rendering those two numbers under "Code needs" and "You
+ * have" said the user supplied 81.4 where 75 was required and still failed, which
+ * is not what happened. Rows like that show their message instead.
  */
-function ProvenanceNotice({ provenance }: { provenance: ClimateProvenance }) {
-  if (!provenance.interpolated) {
-    return (
-      <p className="rounded-xl border border-band-good/30 bg-band-good/[0.07] px-4 py-3 text-sm text-ink-2">
-        <span className="font-semibold text-band-good">Measured.</span> Your boundary
-        contains {provenance.enclosed_node_count} measured climate{' '}
-        {provenance.enclosed_node_count === 1 ? 'cell' : 'cells'}
-        {provenance.enclosed_node_count === 1 ? '' : ', combined'} — nothing below was
-        estimated.
-      </p>
-    );
-  }
+function isSpecComparison(parameter: string): boolean {
+  return parameter !== 'walling_climate_suitability';
+}
 
-  return (
-    <div className="rounded-xl border border-signal/40 bg-signal/[0.08] px-4 py-3 text-sm">
-      <p className="font-semibold text-signal">Estimated for this location</p>
-      <p className="mt-1 leading-relaxed text-ink-2">
-        No measured cell falls inside your boundary, so the climate below was
-        interpolated from the {provenance.source_districts.length} nearest measured{' '}
-        {provenance.source_districts.length === 1 ? 'cell' : 'cells'} —{' '}
-        {provenance.source_districts.join(', ')} — with closer cells weighted more
-        heavily. The nearest is {provenance.nearest_source_km.toFixed(0)} km away.
-      </p>
-      <p className="mt-2 text-xs leading-relaxed text-ink-3">
-        This is interpolation between real readings, not invention. Treat the result
-        as indicative and confirm against site data before it informs a permit.
-      </p>
-    </div>
-  );
+/**
+ * Trims a finding value to a sensible number of decimals.
+ *
+ * These arrive as raw floats — a humidity of 81.41115885900099 was being printed
+ * in full. Grades and cement contents are whole numbers; a water/cement ratio
+ * needs two places.
+ */
+function formatFindingValue(value: number): string {
+  return Number.isInteger(value) ? value.toFixed(0) : value.toFixed(2);
 }
 
 function Measurement({ label, value }: { label: string; value: string }) {

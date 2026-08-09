@@ -1,5 +1,5 @@
 /**
- * 3D satellite globe. Drag the earth, shift-drag to draw a site boundary.
+ * 3D satellite globe. Drag the earth to look around; plot a site by clicking.
  *
  * IMAGERY
  * A tile engine rather than a single texture. One equirectangular JPEG is 2048 px
@@ -16,13 +16,21 @@
  * interpolated — rather than by crippling navigation.
  *
  * SELECTION
- * Drawing is opt-in, armed by the pencil button on the page. While it is off every
- * drag rotates the earth; while it is on every drag pulls out a rectangle. There is
- * no modifier-key overlap between the two, so a drag can never do the thing the
- * user did not mean.
+ * Drawing is opt-in, armed by the pencil button on the page, and works by
+ * plotting an outline: click each corner in turn, then click the first vertex
+ * again to close the shape. Rotation is frozen for the duration — not just
+ * during a captured drag — so a click can never also spin the globe out from
+ * under the point being placed. That is also why this is a plot and not a drag:
+ * a single continuous gesture has no natural moment to say "this corner is where
+ * I meant," whereas a deliberate click does.
+ *
+ * A polygon rather than a rectangle because real plots are rarely square, and a
+ * box around a triangular corner plot claims roughly double its true area.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Globe, { type GlobeMethods } from 'react-globe.gl';
+
+import type { LatLon } from '@/lib/geo';
 
 /** Earth radius in the units react-globe.gl uses for camera altitude. */
 const GLOBE_RADIUS_UNITS = 100;
@@ -75,12 +83,8 @@ const FALLBACK_TILE_LEVEL = 19;
 const TILE_URL = (x: number, y: number, level: number): string =>
   `/api/tiles/${String(level)}/${String(x)}/${String(y)}`;
 
-export interface DrawnArea {
-  south: number;
-  north: number;
-  west: number;
-  east: number;
-}
+/** How close, in pixels, a click must land to the first vertex to close a ring. */
+const CLOSE_RING_PIXELS = 14;
 
 function prefersReducedMotion(): boolean {
   return (
@@ -89,15 +93,14 @@ function prefersReducedMotion(): boolean {
   );
 }
 
-/** A drawn rectangle as a closed GeoJSON ring, in (lon, lat) order. */
-function ringFor(area: DrawnArea): number[][] {
-  return [
-    [area.west, area.south],
-    [area.east, area.south],
-    [area.east, area.north],
-    [area.west, area.north],
-    [area.west, area.south],
-  ];
+/** A drawn outline as a closed GeoJSON ring, in (lon, lat) order. */
+function ringFor(vertices: readonly LatLon[]): number[][] {
+  const ring = vertices.map((vertex) => [vertex.longitude, vertex.latitude]);
+  const first = ring[0];
+  if (first !== undefined) {
+    ring.push([...first]);
+  }
+  return ring;
 }
 
 /** Where the camera should be looking. Changing this flies the globe there. */
@@ -111,9 +114,10 @@ export interface CameraTarget {
 }
 
 export function DistrictGlobe({
-  area,
+  outline,
   drawing,
   onDraw,
+  onPreview,
   target,
   maxZoom,
   attribution,
@@ -121,11 +125,17 @@ export function DistrictGlobe({
   handoverAltitude,
   fullScreen = false,
 }: {
-  /** The committed site boundary, if one has been drawn. */
-  area: DrawnArea | null;
-  /** Whether drag-to-draw is armed. When false, dragging always rotates. */
+  /** The committed site outline, if one has been drawn. */
+  outline: readonly LatLon[] | null;
+  /** Whether plotting is armed. When false, dragging always rotates. */
   drawing: boolean;
-  onDraw: (area: DrawnArea) => void;
+  onDraw: (outline: LatLon[]) => void;
+  /**
+   * Fired on every vertex placed and every move, and with `null` the moment the
+   * outline is committed or cancelled. Exists so the page can show a live area
+   * estimate before there is anything to save.
+   */
+  onPreview?: ((outline: readonly LatLon[] | null) => void) | undefined;
   /** Set by a place search. Null leaves the camera where the user put it. */
   target: CameraTarget | null;
   /** Deepest zoom the server's imagery actually reaches. */
@@ -146,9 +156,10 @@ export function DistrictGlobe({
   const containerRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const [size, setSize] = useState({ width: 0, height: 0 });
-  /** The rectangle currently being dragged out, shown live. */
-  const [preview, setPreview] = useState<DrawnArea | null>(null);
-  const anchorRef = useRef<{ lat: number; lng: number } | null>(null);
+  /** The outline currently being plotted, shown live. */
+  const [preview, setPreview] = useState<readonly LatLon[] | null>(null);
+  /** Vertices placed so far in the outline currently being drawn. */
+  const verticesRef = useRef<LatLon[]>([]);
 
   // The WebGL canvas needs explicit pixel dimensions — it cannot be sized in
   // percentages — so the container is measured and the canvas follows it. This
@@ -229,97 +240,152 @@ export function DistrictGlobe({
   }, [target, ready]);
 
   /**
-   * Rectangle drawing, driven from raw pointer events on the canvas.
+   * Outline plotting: click each corner in turn, then click the first vertex
+   * again — or press Enter — to close the shape.
    *
    * `toGlobeCoords` converts a screen position to a point on the sphere, returning
-   * null where the ray misses the globe — dragging off the edge of the earth must
-   * leave the rectangle at its last valid corner rather than jumping.
+   * null where the ray misses the globe — a corner can only ever be placed on the
+   * earth itself, never off its edge.
    *
-   * OrbitControls is disabled for the duration of a draw. Without that, the same
-   * drag would rotate the planet underneath the rectangle being drawn on it.
+   * OrbitControls is frozen for as long as drawing is armed, not just mid-plot.
+   * A globe that kept spinning between clicks would put the next vertex somewhere
+   * other than where the user was looking when they clicked it.
+   *
+   * `drawing` is shared with the flat map — one pencil button drives both — so
+   * this runs just as much while the globe is hidden behind the map as while it
+   * is on screen. `!globe` (rather than `=== undefined`) is deliberate: once the
+   * `<Globe>` element unmounts, which it does here because its hidden container
+   * collapses to zero size, react-globe.gl clears the ref to `null`, not
+   * `undefined`, and this effect must not act on a torn-down instance either way.
    */
   useEffect(() => {
     const element = containerRef.current;
     const globe = globeRef.current;
-    if (element === null || globe === undefined || !ready) {
+    if (element === null || !globe || !ready) {
       return;
     }
 
-    const toCoords = (event: PointerEvent): { lat: number; lng: number } | null => {
+    if (!drawing) {
+      // Covers leaving draw mode mid-plot (switching to pan, or navigating away):
+      // half-placed vertices must not linger as a stuck shape on the globe, and
+      // the page's live estimate must be told there is nothing to show any more.
+      globe.controls().enabled = true;
+      if (verticesRef.current.length > 0) {
+        verticesRef.current = [];
+        setPreview(null);
+        onPreview?.(null);
+      }
+      return;
+    }
+
+    globe.controls().enabled = false;
+
+    const toCoords = (event: PointerEvent): LatLon | null => {
       const rect = element.getBoundingClientRect();
-      return globe.toGlobeCoords(event.clientX - rect.left, event.clientY - rect.top);
+      const point = globe.toGlobeCoords(
+        event.clientX - rect.left,
+        event.clientY - rect.top
+      );
+      return point === null ? null : { latitude: point.lat, longitude: point.lng };
     };
 
-    const onPointerDown = (event: PointerEvent) => {
-      // Drawing is opt-in. With the tool off, every drag rotates the globe — no
-      // modifier key, so a drag can never surprise the user by cutting a box.
-      if (!drawing) {
+    const cancelPending = () => {
+      if (verticesRef.current.length > 0) {
+        verticesRef.current = [];
+        setPreview(null);
+        onPreview?.(null);
+      }
+    };
+
+    const commit = () => {
+      const vertices = verticesRef.current;
+      // Fewer than three points is a line, not a plot.
+      if (vertices.length < 3) {
         return;
       }
-      const start = toCoords(event);
-      if (start === null) {
-        return;
-      }
-      anchorRef.current = start;
-      globe.controls().enabled = false;
-      element.setPointerCapture(event.pointerId);
+      const finished = [...vertices];
+      cancelPending();
+      onDraw(finished);
     };
 
     const onPointerMove = (event: PointerEvent) => {
-      const anchor = anchorRef.current;
-      if (anchor === null) {
+      if (verticesRef.current.length === 0) {
         return;
       }
       const current = toCoords(event);
       if (current === null) {
         return;
       }
-      setPreview({
-        south: Math.min(anchor.lat, current.lat),
-        north: Math.max(anchor.lat, current.lat),
-        west: Math.min(anchor.lng, current.lng),
-        east: Math.max(anchor.lng, current.lng),
-      });
+      // The live shape includes the point under the cursor, so what is drawn and
+      // what the panel reports are the same shape.
+      const live = [...verticesRef.current, current];
+      setPreview(live);
+      onPreview?.(live);
     };
 
-    const onPointerUp = (event: PointerEvent) => {
-      if (anchorRef.current === null) {
+    const onPointerDown = (event: PointerEvent) => {
+      const point = toCoords(event);
+      if (point === null) {
         return;
       }
-      anchorRef.current = null;
-      globe.controls().enabled = true;
-      if (element.hasPointerCapture(event.pointerId)) {
-        element.releasePointerCapture(event.pointerId);
+
+      const vertices = verticesRef.current;
+      const first = vertices[0];
+      if (first !== undefined && vertices.length >= 3) {
+        const firstScreen = globe.getScreenCoords(first.latitude, first.longitude);
+        const rect = element.getBoundingClientRect();
+        const dx = firstScreen.x - (event.clientX - rect.left);
+        const dy = firstScreen.y - (event.clientY - rect.top);
+        if (Math.hypot(dx, dy) <= CLOSE_RING_PIXELS) {
+          commit();
+          return;
+        }
       }
 
-      setPreview((current) => {
-        // A click, not a drag. Degenerate rectangles are rejected by the API's
-        // ordering validator anyway, so they are discarded here rather than sent.
-        if (current !== null && current.north > current.south && current.east > current.west) {
-          onDraw(current);
-        }
-        return null;
-      });
+      verticesRef.current = [...vertices, point];
+      setPreview(verticesRef.current);
+      onPreview?.(verticesRef.current);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        cancelPending();
+        return;
+      }
+      if (event.key === 'Enter') {
+        commit();
+        return;
+      }
+      // Undo the last vertex rather than the whole outline: a misplaced corner
+      // five clicks in should not cost the other four.
+      if (event.key === 'Backspace' && verticesRef.current.length > 0) {
+        event.preventDefault();
+        verticesRef.current = verticesRef.current.slice(0, -1);
+        const remaining = verticesRef.current;
+        setPreview(remaining.length === 0 ? null : remaining);
+        onPreview?.(remaining.length === 0 ? null : remaining);
+      }
     };
 
     element.addEventListener('pointerdown', onPointerDown);
     element.addEventListener('pointermove', onPointerMove);
-    element.addEventListener('pointerup', onPointerUp);
-    element.addEventListener('pointercancel', onPointerUp);
+    window.addEventListener('keydown', onKeyDown);
     return () => {
       element.removeEventListener('pointerdown', onPointerDown);
       element.removeEventListener('pointermove', onPointerMove);
-      element.removeEventListener('pointerup', onPointerUp);
-      element.removeEventListener('pointercancel', onPointerUp);
+      window.removeEventListener('keydown', onKeyDown);
+      cancelPending();
     };
-  }, [ready, drawing, onDraw]);
+  }, [ready, drawing, onDraw, onPreview]);
 
-  /** The live preview wins over the committed area while a drag is in progress. */
-  const shown = preview ?? area;
+  /** The live preview wins over the committed outline while plotting. */
+  const shown = preview ?? outline;
 
   const polygons = useMemo(
     () =>
-      shown === null
+      // Two vertices are an edge, not a polygon — three.js would render a
+      // degenerate face, so nothing is drawn until there is a real shape.
+      shown === null || shown.length < 3
         ? []
         : [
             {

@@ -18,6 +18,20 @@
          interface. Without it the native widgets render light on a dark page. -->
     <meta name="color-scheme" content="dark" />
     <meta name="theme-color" content="#0b0e17" />
+
+    <!-- Space Grotesk: geometric, technical, reads cleanly in the uppercase
+         tracked labels used throughout ("STEP 1 OF 5", district names) and in
+         the large tabular scores. Previously the app only ever specified 'Inter'
+         without loading it, so it silently rendered in whatever the OS defaulted
+         to — this is the first webfont the app actually fetches. `display=swap`
+         means text paints immediately in the fallback stack and swaps once the
+         font arrives, rather than staying invisible while it loads. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>

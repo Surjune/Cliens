@@ -10,8 +10,10 @@ from fastapi.responses import Response
 from app.routes.dependencies import ScoringServiceDep
 from app.routes.scoring import to_selection
 from app.schemas.common import ErrorResponse
-from app.schemas.scoring import ScoreRequest
+from app.schemas.scoring import AreaScoreRequest, ScoreRequest
+from app.services.area_climate import AreaBounds
 from app.services.report_pdf import build_report_pdf
+from app.services.scoring import ScoreComparison
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -51,9 +53,54 @@ async def download_report(request: ScoreRequest, service: ScoringServiceDep) -> 
         proposed=to_selection(request.materials),
         situation=request.element_situation,
     )
-    pdf = build_report_pdf(comparison, evaluated_own_materials=request.materials is not None)
+    return _pdf_response(comparison, evaluated_own_materials=request.materials is not None)
 
-    filename = f"building-quality-score-{comparison.district.lower()}.pdf"
+
+@router.post(
+    "/area",
+    summary="Download the client report for a drawn site as a PDF",
+    responses={
+        status.HTTP_200_OK: {
+            "content": {"application/pdf": {}},
+            "description": "The report.",
+        },
+        **REPORT_ERRORS,
+    },
+)
+async def download_area_report(request: AreaScoreRequest, service: ScoringServiceDep) -> Response:
+    """The same report, for a boundary drawn on the map rather than a named district.
+
+    A separate endpoint for the same reason `/score/area` is separate: a drawn
+    outline has no district name, and `ScoreRequest` requires one. Without this,
+    downloading the report after plotting a site failed validation before it ever
+    reached the engine.
+    """
+    comparison, _ = service.compare_area(
+        area=AreaBounds(
+            south=request.area.south,
+            north=request.area.north,
+            west=request.area.west,
+            east=request.area.east,
+        ),
+        proposed=to_selection(request.materials),
+        situation=request.element_situation,
+    )
+    return _pdf_response(comparison, evaluated_own_materials=request.materials is not None)
+
+
+def _pdf_response(comparison: ScoreComparison, *, evaluated_own_materials: bool) -> Response:
+    """Render a comparison as a downloadable PDF.
+
+    Shared by both endpoints so the document and its filename cannot differ
+    depending on how the site was chosen.
+    """
+    pdf = build_report_pdf(comparison, evaluated_own_materials=evaluated_own_materials)
+    # A drawn area's name contains spaces and brackets, neither of which belong in
+    # a filename a browser is about to write to disk.
+    slug = "".join(
+        character if character.isalnum() else "-" for character in comparison.district.lower()
+    ).strip("-")
+    filename = f"building-quality-score-{slug or 'site'}.pdf"
     return Response(
         content=pdf,
         media_type="application/pdf",

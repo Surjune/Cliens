@@ -291,6 +291,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/voice/capabilities": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Whether Tamil narration is available
+         * @description Report whether narration can run, before the client offers it.
+         */
+        get: operations["get_capabilities_api_voice_capabilities_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/voice/narrate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read a question and its options aloud in Tamil
+         * @description Synthesise one narration and return it as a single WAV file.
+         *
+         *     One file rather than a list of chunks: the browser gets a single audio source,
+         *     so a long narration plays continuously instead of gapping between pieces.
+         */
+        post: operations["narrate_api_voice_narrate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/sites": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save a drawn site boundary
+         * @description Persist a drawn polygon and return its authoritative area.
+         */
+        post: operations["create_site_api_sites_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -482,6 +545,20 @@ export interface components {
             west: number;
             /** East */
             east: number;
+        };
+        /**
+         * CreateSiteRequest
+         * @description A drawn boundary to save.
+         *
+         *     An arbitrary polygon rather than a rectangle. Real plots are rarely square,
+         *     and a bounding box around a triangular corner plot claims roughly double its
+         *     true area — which would then be the figure shown to the user as their site's
+         *     size.
+         */
+        CreateSiteRequest: {
+            geometry: components["schemas"]["PolygonGeometry"];
+            /** Label */
+            label?: string | null;
         };
         /**
          * DependencyStatus
@@ -750,6 +827,19 @@ export interface components {
             element_situation: "enclosed" | "sheltered" | "exposed" | "buried" | "tidal";
         };
         /**
+         * NarrationRequest
+         * @description Text to be read aloud.
+         *
+         *     The client sends finished Tamil prose rather than a question id. That keeps the
+         *     wording beside the English it mirrors in the frontend, where a reviewer can
+         *     check the translation against what is on screen, instead of splitting one
+         *     sentence across two repositories.
+         */
+        NarrationRequest: {
+            /** Text */
+            text: string;
+        };
+        /**
          * PinRequest
          * @description A point dropped on a map or globe.
          */
@@ -785,6 +875,30 @@ export interface components {
              * @description Great-circle distance from the pin to the grid node it resolved to.
              */
             distance_km: number;
+        };
+        /**
+         * PolygonGeometry
+         * @description A GeoJSON Polygon restricted to what a building site can legitimately be.
+         *
+         *     Only the exterior ring is accepted: a building footprint with a hole is not a
+         *     meaningful site for this product, and supporting holes would complicate the
+         *     area calculation without a use case.
+         */
+        PolygonGeometry: {
+            /**
+             * Type
+             * @default Polygon
+             * @constant
+             */
+            type: "Polygon";
+            /**
+             * Coordinates
+             * @description Exactly one linear ring: the exterior boundary, in [lon, lat] order.
+             */
+            coordinates: [
+                number,
+                number
+            ][][];
         };
         /**
          * ReadinessResponse
@@ -922,6 +1036,83 @@ export interface components {
             compliant: boolean;
             /** Findings */
             findings: components["schemas"]["ComplianceFindingResponse"][];
+            service_life: components["schemas"]["ServiceLifeResponse"];
+        };
+        /**
+         * ServiceLifeResponse
+         * @description How long this specification implies the concrete will serve.
+         *
+         *     Anchored on the design life IS 456's durability provisions are written to
+         *     deliver, then adjusted by how far the mix sits from those provisions. It is
+         *     not a prediction fitted to observed failures — no such dataset exists for this
+         *     — which is why a range is returned rather than a single year, and why
+         *     ``basis`` travels with it rather than living only in the documentation.
+         */
+        ServiceLifeResponse: {
+            /**
+             * Years
+             * @description Point estimate, in years.
+             */
+            years: number;
+            /**
+             * Lower Years
+             * @description Lower bound of the plausible band.
+             */
+            lower_years: number;
+            /**
+             * Upper Years
+             * @description Upper bound of the plausible band.
+             */
+            upper_years: number;
+            /**
+             * Baseline Years
+             * @description The design life a specification meeting the code exactly would give.
+             */
+            baseline_years: number;
+            /**
+             * Basis
+             * @description One line stating what the estimate is derived from.
+             */
+            basis: string;
+        };
+        /**
+         * SiteResponse
+         * @description A saved site, with its authoritative area.
+         *
+         *     ``area_sq_ft`` is the figure the frontend should display and cannot itself
+         *     have supplied: it is computed by the server from the stored geometry on the
+         *     WGS84 spheroid, which is why saving is worth a round trip even though the
+         *     frontend already shows a quick estimate while the box is being plotted.
+         */
+        SiteResponse: {
+            /** Id */
+            id: string;
+            /** Area Sq Ft */
+            area_sq_ft: number;
+            /** Centroid Latitude */
+            centroid_latitude: number;
+            /** Centroid Longitude */
+            centroid_longitude: number;
+            /** Label */
+            label: string | null;
+            /** Created At */
+            created_at: string;
+        };
+        /**
+         * VoiceCapabilities
+         * @description Whether voice narration can run, and how it is configured.
+         *
+         *     The client asks before showing any Listen button. Rendering a control that
+         *     cannot work is worse than not offering it, because the user discovers the gap
+         *     only after pressing it.
+         */
+        VoiceCapabilities: {
+            /** Available */
+            available: boolean;
+            /** Speaker */
+            speaker: string;
+            /** Language */
+            language: string;
         };
     };
     responses: never;
@@ -1413,6 +1604,117 @@ export interface operations {
             };
             /** @description The upstream map or geocoding service did not respond in time. */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_capabilities_api_voice_capabilities_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VoiceCapabilities"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    narrate_api_voice_narrate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NarrationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No configured key could synthesise the audio. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_site_api_sites_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateSiteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SiteResponse"];
+                };
+            };
+            /** @description The outline is not a usable polygon, or not a plausible site size. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

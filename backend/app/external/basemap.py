@@ -38,8 +38,7 @@ logger = get_logger(__name__)
 #: Metered. The free tier is generous but this is the one source in the chain that
 #: can cost money, which is why it is opt-in rather than the default.
 MAPBOX_IMAGERY_URL = (
-    "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90"
-    "?access_token={token}"
+    "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90" "?access_token={token}"
 )
 
 #: Esri World Imagery Clarity — the preferred keyless source.
@@ -86,9 +85,7 @@ class GeocodeResult:
     bounds: tuple[float, float, float, float] | None
 
 
-async def fetch_composited_tile(
-    x: int, y: int, z: int, mapbox_token: str | None = None
-) -> bytes:
+async def fetch_composited_tile(x: int, y: int, z: int, mapbox_token: str | None = None) -> bytes:
     """One map tile with place names burned into the satellite imagery.
 
     The labels layer is optional in practice: it has no tiles at some zoom levels
@@ -128,9 +125,7 @@ async def fetch_composited_tile(
     base: Image.Image | None = None
     if mapbox_token is not None:
         base = _decode_imagery(
-            await _fetch(
-                client, MAPBOX_IMAGERY_URL.format(x=x, y=y, z=z, token=mapbox_token)
-            )
+            await _fetch(client, MAPBOX_IMAGERY_URL.format(x=x, y=y, z=z, token=mapbox_token))
         )
         if base is None:
             logger.info("mapbox_tile_unavailable_falling_back", z=z, x=x, y=y)

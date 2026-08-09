@@ -5,6 +5,7 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
 import { SessionProvider } from './state/session';
+import { VoiceProvider } from './state/voice';
 
 const container = document.getElementById('root');
 
@@ -18,7 +19,9 @@ createRoot(container).render(
   <StrictMode>
     <BrowserRouter>
       <SessionProvider>
-        <App />
+        <VoiceProvider>
+          <App />
+        </VoiceProvider>
       </SessionProvider>
     </BrowserRouter>
   </StrictMode>

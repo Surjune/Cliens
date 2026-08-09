@@ -86,9 +86,7 @@ async def get_tile(
 
 def _max_zoom(mapbox_configured: bool) -> int:
     """The deepest zoom the configured providers actually publish."""
-    return (
-        constants.MAX_TILE_ZOOM_MAPBOX if mapbox_configured else constants.MAX_TILE_ZOOM_ESRI
-    )
+    return constants.MAX_TILE_ZOOM_MAPBOX if mapbox_configured else constants.MAX_TILE_ZOOM_ESRI
 
 
 @router.get(

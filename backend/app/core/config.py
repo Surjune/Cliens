@@ -58,6 +58,14 @@ class Settings(BaseSettings):
     rate_limit_requests: Annotated[int, Field(ge=1, le=10_000)] = 60
     rate_limit_window_seconds: Annotated[int, Field(ge=1, le=3_600)] = 60
 
+    # --- Sarvam AI text-to-speech ------------------------------------------
+    # Two keys from two accounts. Both optional: with neither set the app simply
+    # offers no voice narration, and every question remains usable as text.
+    sarvam_api_key_primary: str | None = None
+    sarvam_api_key_secondary: str | None = None
+    sarvam_tts_speaker: str = "kavitha"
+    sarvam_tts_language: str = "ta-IN"
+
     # --- Basemap imagery ---------------------------------------------------
     # Optional. Without it the map falls back to Esri, which publishes no imagery
     # deeper than zoom 19 (~0.3 m per pixel). Mapbox Satellite reaches zoom 22 in
@@ -101,6 +109,27 @@ class Settings(BaseSettings):
 
     @computed_field  # type: ignore[prop-decorator]
     @property
+    def voice_configured(self) -> bool:
+        """Whether voice narration can run at all.
+
+        One key is enough. The second only buys failover, so requiring both would
+        disable the feature for anyone with a single account.
+        """
+        return bool(self.sarvam_api_key_primary or self.sarvam_api_key_secondary)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def sarvam_keys(self) -> tuple[str, ...]:
+        """Configured keys in failover order, primary first.
+
+        Ordered rather than a set: which key is tried first is the whole point.
+        """
+        return tuple(
+            key for key in (self.sarvam_api_key_primary, self.sarvam_api_key_secondary) if key
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
     def mapbox_configured(self) -> bool:
         """Whether the deeper Mapbox imagery is available.
 
@@ -140,6 +169,8 @@ class Settings(BaseSettings):
     # Validation
     # ----------------------------------------------------------------------
     @field_validator(
+        "sarvam_api_key_primary",
+        "sarvam_api_key_secondary",
         "mapbox_access_token",
         "gemini_api_key",
         "earth_engine_project_id",

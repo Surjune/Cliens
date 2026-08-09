@@ -7,6 +7,7 @@ import type { ReactNode } from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 
 import { useSession } from '@/state/session-context';
+import { useVoice } from '@/state/voice-context';
 
 /** The flow, in order. The rail and the guard both read from this one list. */
 export const STEPS = [
@@ -35,12 +36,45 @@ export function RequireSite({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+/**
+ * App-wide switch for Tamil narration.
+ *
+ * Hidden entirely when the server has no key configured — offering a toggle for
+ * something that cannot happen is worse than offering nothing.
+ */
+export function VoiceToggle() {
+  const { enabled, supported, setEnabled } = useVoice();
+
+  if (!supported) {
+    return null;
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setEnabled(!enabled);
+      }}
+      aria-pressed={enabled}
+      aria-label={enabled ? 'Turn off Tamil voice explanations' : 'Turn on Tamil voice explanations'}
+      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em] transition-colors ${
+        enabled
+          ? 'border-atmos/50 bg-atmos/12 text-atmos'
+          : 'border-white/12 text-ink-3 hover:text-ink-2'
+      }`}
+    >
+      <span aria-hidden="true">{enabled ? '🔊' : '🔇'}</span>
+      தமிழ்
+    </button>
+  );
+}
+
 export function StepRail() {
   const location = useLocation();
   const activeIndex = STEPS.findIndex((step) => step.path === location.pathname);
 
   return (
-    <nav aria-label="Progress" className="flex items-center gap-2">
+    <nav aria-label="Progress" className="flex flex-wrap items-center gap-2">
       {STEPS.map((step, index) => {
         const state =
           index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'upcoming';
@@ -64,6 +98,7 @@ export function StepRail() {
           </div>
         );
       })}
+      <VoiceToggle />
     </nav>
   );
 }

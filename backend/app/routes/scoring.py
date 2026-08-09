@@ -27,6 +27,7 @@ from app.schemas.scoring import (
     ScoredSelectionResponse,
     ScoreRequest,
     ScoreResponse,
+    ServiceLifeResponse,
 )
 from app.services.area_climate import AreaBounds
 from app.services.rules_engine import ConcreteMix, MaterialSelection
@@ -171,6 +172,25 @@ def to_selection(materials: MaterialSelectionInput | None) -> MaterialSelection 
     )
 
 
+SERVICE_LIFE_BASIS = (
+    "Estimated from IS 456's 50-year design life, adjusted for how this mix's "
+    "water/cement ratio and compliance compare to the exposure class minimums. "
+    "Not a prediction from observed building failures."
+)
+
+
+def _to_service_life(scored: ScoredSelection) -> ServiceLifeResponse:
+    """Map the estimate and its band onto the response shape."""
+    lower, upper = scored.service_life_interval
+    return ServiceLifeResponse(
+        years=round(scored.service_life_years, 1),
+        lower_years=round(lower, 1),
+        upper_years=round(upper, 1),
+        baseline_years=constants.DESIGN_SERVICE_LIFE_YEARS,
+        basis=SERVICE_LIFE_BASIS,
+    )
+
+
 def _to_scored(scored: ScoredSelection) -> ScoredSelectionResponse:
     """Map one scored specification onto its response shape."""
     from app.schemas.scoring import ConcreteMixInput
@@ -188,6 +208,7 @@ def _to_scored(scored: ScoredSelection) -> ScoredSelectionResponse:
         rules_score=scored.rules_score,
         band=scored.band,
         compliant=scored.assessment.compliant,
+        service_life=_to_service_life(scored),
         findings=tuple(
             ComplianceFindingResponse(
                 parameter=finding.parameter,

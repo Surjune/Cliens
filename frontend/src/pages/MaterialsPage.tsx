@@ -10,6 +10,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { PageShell } from '@/components/Shell';
+import { VoiceExplainer } from '@/components/VoiceExplainer';
+import { buildNarration, TA } from '@/lib/narration.ta';
+import { useVoice } from '@/state/voice-context';
 import { Button, CONTROL, ChoiceCard, Field, Panel, Popup } from '@/components/ui';
 import { useSession } from '@/state/session-context';
 import { CEMENT_TYPES, CONCRETE_GRADES, WALLING_MATERIALS } from '@/types/api';
@@ -21,6 +24,7 @@ export default function MaterialsPage() {
   const { spec, update, updateConcrete } = useSession();
   const navigate = useNavigate();
   const [editor, setEditor] = useState<Editor>(null);
+  const voice = useVoice();
 
   const close = () => {
     setEditor(null);
@@ -98,6 +102,11 @@ export default function MaterialsPage() {
         description="The characteristic compressive strength in N/mm² at 28 days."
         onClose={close}
       >
+        <VoiceExplainer
+          text={buildNarration(TA.grade.question, TA.grade.options)}
+          enabled={voice.enabled}
+          className="mb-4"
+        />
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
           {CONCRETE_GRADES.map((grade) => (
             <button
@@ -130,6 +139,11 @@ export default function MaterialsPage() {
         description="Content per cubic metre, and the type."
         onClose={close}
       >
+        <VoiceExplainer
+          text={buildNarration(TA.cement.question, TA.cement.options)}
+          enabled={voice.enabled}
+          className="mb-4"
+        />
         <Field label="Cement content" hint="kg per m³ of concrete. Typically 250–450.">
           {(id) => (
             <input
@@ -182,6 +196,11 @@ export default function MaterialsPage() {
         description="Mass of water divided by mass of cement."
         onClose={close}
       >
+        <VoiceExplainer
+          text={buildNarration(TA.waterCement.question, TA.waterCement.options)}
+          enabled={voice.enabled}
+          className="mb-4"
+        />
         <div className="tabular text-center text-5xl font-semibold text-atmos">
           {spec.concrete.water_cement_ratio.toFixed(2)}
         </div>
@@ -218,6 +237,11 @@ export default function MaterialsPage() {
         description="Assessed for suitability in your district's climate."
         onClose={close}
       >
+        <VoiceExplainer
+          text={buildNarration(TA.walling.question, TA.walling.options)}
+          enabled={voice.enabled}
+          className="mb-4"
+        />
         <div className="space-y-2">
           {WALLING_MATERIALS.map((material) => (
             <ChoiceCard

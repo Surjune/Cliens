@@ -5,9 +5,10 @@
  * the thing being chosen is a place, and a place is best shown at scale. All chrome
  * floats over it on glass so nothing crops the earth.
  *
- * Picking is by dragging a boundary around the site. Whether that area has measured
- * climate is decided by the backend at scoring time, not guessed here — this page
- * never substitutes a nearby district for one that has no data.
+ * Picking is by plotting an outline around the site — click each corner, then
+ * click the first one again to close it. Whether that area has measured climate
+ * is decided by the backend at scoring time, not guessed here — this page never
+ * substitutes a nearby district for one that has no data.
  */
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -17,10 +18,24 @@ import type { CameraTarget } from '@/components/globe/DistrictGlobe';
 import { MapControls, type MapMode } from '@/components/globe/MapControls';
 import { PlaceSearch } from '@/components/globe/PlaceSearch';
 import { StepRail } from '@/components/Shell';
+import { VoiceExplainer } from '@/components/VoiceExplainer';
+import { buildNarration, TA } from '@/lib/narration.ta';
+import { useVoice } from '@/state/voice-context';
 import { Button, CONTROL, ErrorNotice, Panel, Popup, SPRING, Spinner } from '@/components/ui';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
+import {
+  boundsOf,
+  estimateAreaSqFt,
+  formatAreaSqFt,
+  formatSpan,
+  toGeoJsonRing,
+  type LatLon,
+} from '@/lib/geo';
 import { useSession } from '@/state/session-context';
 import type { BasemapCapabilities } from '@/types/api';
+
+/** Where saving the drawn boundary to the database currently stands. */
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
 /**
  * three.js is roughly 1.6 MB. Lazily importing it lets this page's chrome paint
@@ -43,8 +58,8 @@ const SiteMap = lazy(() =>
  * over from the globe.
  *
  * Roughly 13 km up. Below this the globe's curvature stops helping and starts
- * getting in the way — the ground shears under the cursor and a dragged rectangle
- * no longer lands where the pointer went.
+ * getting in the way — the ground shears under the cursor and a plotted corner
+ * no longer lands where the pointer was clicked.
  */
 const HANDOVER_ALTITUDE = 0.002;
 
@@ -83,14 +98,6 @@ function altitudeToZoom(altitude: number): number {
   return Math.min(Math.max(zoom, HANDOVER_MAP_ZOOM), 21);
 }
 
-/** Rough span of a drawn box, for telling the user how big their site is. */
-function spanKm(area: { south: number; north: number; west: number; east: number }): number {
-  const latitudeKm = (area.north - area.south) * 111; // ~111 km per degree of latitude
-  const midLatitude = ((area.south + area.north) / 2) * (Math.PI / 180);
-  const longitudeKm = (area.east - area.west) * 111 * Math.cos(midLatitude);
-  return Math.max(latitudeKm, longitudeKm);
-}
-
 export default function LocationPage() {
   const { spec, update, area, setArea, districts, districtsError } = useSession();
   const navigate = useNavigate();
@@ -106,6 +113,20 @@ export default function LocationPage() {
   const altitudeRef = useRef(HOME_ALTITUDE);
   const [target, setTarget] = useState<CameraTarget | null>(null);
   const [basemap, setBasemap] = useState<BasemapCapabilities | null>(null);
+  const voice = useVoice();
+  /** The outline currently being plotted, before it is closed. */
+  const [previewArea, setPreviewArea] = useState<readonly LatLon[] | null>(null);
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+  const [saveError, setSaveError] = useState<unknown>(null);
+  /**
+   * The authoritative area PostGIS computed on save, once it arrives.
+   *
+   * Kept separate from the quick client-side estimate so the panel can show the
+   * live guess immediately and then visibly refine to the real figure — the two
+   * are never blended, so what is on screen is always honestly labelled as one
+   * or the other.
+   */
+  const [savedAreaSqFt, setSavedAreaSqFt] = useState<number | null>(null);
   /**
    * Non-null once the view has handed over to the flat map. Holds where the map
    * is looking, so switching back to the globe returns to the same place rather
@@ -182,16 +203,42 @@ export default function LocationPage() {
     return needle === '' ? names : names.filter((name) => name.toLowerCase().includes(needle));
   }, [districts, query]);
 
+  /** Clears everything to do with a previously drawn boundary. */
+  const resetSiteState = useCallback(() => {
+    setPreviewArea(null);
+    setSaveStatus('idle');
+    setSaveError(null);
+    setSavedAreaSqFt(null);
+  }, []);
+
   const handleDraw = useCallback(
-    (drawn: { south: number; north: number; west: number; east: number }) => {
+    (drawn: LatLon[]) => {
       setArea(drawn);
       // An area and a named district are alternatives, not a pair. Clearing the
       // name here is what stops a stale district being scored instead of the box
       // the user just drew.
       update({ district: '' });
       // Put the pencil down once a boundary exists. Leaving it armed means the
-      // next drag silently replaces the box the user just drew.
+      // next click starts silently plotting a replacement for the box just drawn.
       setMode('pan');
+      setPreviewArea(null);
+      setSavedAreaSqFt(null);
+      setSaveError(null);
+      setSaveStatus('saving');
+
+      // Saving is a side effect of committing the box, not a gate on continuing:
+      // the scoring flow uses the bounds already held in state, so a slow or
+      // failed save never blocks the user from moving on with the site they drew.
+      apiClient
+        .saveSite(toGeoJsonRing(drawn))
+        .then((saved) => {
+          setSavedAreaSqFt(saved.area_sq_ft);
+          setSaveStatus('saved');
+        })
+        .catch((error: unknown) => {
+          setSaveError(error);
+          setSaveStatus('error');
+        });
     },
     [setArea, update]
   );
@@ -290,6 +337,9 @@ export default function LocationPage() {
     };
   }, []);
 
+  /** Bounding box of the committed outline, for the span readout. */
+  const siteBounds = useMemo(() => (area === null ? null : boundsOf(area)), [area]);
+
   const ready = area !== null || spec.district !== '';
 
   if (districtsError !== null) {
@@ -311,9 +361,10 @@ export default function LocationPage() {
       <div className="absolute inset-0" hidden={mapView !== null}>
         <Suspense fallback={<GlobeLoading />}>
           <DistrictGlobe
-            area={area}
+            outline={area}
             drawing={mode === 'draw'}
             onDraw={handleDraw}
+            onPreview={setPreviewArea}
             target={target}
             maxZoom={basemap?.max_zoom}
             attribution={basemap?.attribution}
@@ -330,9 +381,10 @@ export default function LocationPage() {
             <SiteMap
               centre={mapView ?? { latitude: 11, longitude: 77 }}
               zoom={mapView?.zoom ?? HANDOVER_MAP_ZOOM}
-              area={area}
+              outline={area}
               drawing={mode === 'draw'}
               onDraw={handleDraw}
+              onPreview={setPreviewArea}
               onZoomOut={handleMapZoomOut}
               zoomCommand={zoomCommand}
               maxZoom={basemap?.max_zoom ?? 19}
@@ -355,7 +407,11 @@ export default function LocationPage() {
           map paints over the search bar, the controls and the site panel — the
           chrome is still in the DOM but completely hidden. */}
       <div className="pointer-events-none absolute inset-0 z-[1100] flex flex-col justify-between gap-4 overflow-hidden p-[clamp(0.75rem,2vw,2rem)]">
-        <header className="pointer-events-auto flex w-full min-w-0 max-w-[min(30rem,calc(100vw-6rem))] flex-col gap-[clamp(0.5rem,1.4vh,1.25rem)]">
+        {/* Deliberately unbacked. A glass panel here reads as a card sitting on
+            top of the earth and crops the very thing the page is for; legibility
+            over bright imagery is handled by the text shadow in `index.css`
+            instead, which costs no pixels. */}
+        <header className="map-chrome pointer-events-auto flex w-full min-w-0 max-w-[min(30rem,calc(100vw-6rem))] flex-col gap-[clamp(0.5rem,1.4vh,1.25rem)]">
           <StepRail />
           <div>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-atmos">
@@ -367,9 +423,21 @@ export default function LocationPage() {
             <p className="mt-1.5 text-[clamp(0.8rem,1.1vw,0.95rem)] leading-relaxed text-ink-2">
               {mapView === null
                 ? 'Search an address or PIN code, or zoom in — the view switches to a flat satellite map for close work.'
-                : 'Pick up the pencil and drag a box around your site. Zoom out to return to the globe.'}
+                : mode === 'draw'
+                  ? previewArea === null
+                    ? 'Click the first corner of your site.'
+                    : previewArea.length < 4
+                      ? 'Keep clicking corners — at least three.'
+                      : 'Click the first corner again to close the shape, or press Enter.'
+                  : 'Pick up the pencil, then click around your site to outline it. Zoom out to return to the globe.'}
             </p>
           </div>
+
+          <VoiceExplainer
+            text={buildNarration(TA.location.question, TA.location.options)}
+            enabled={voice.enabled}
+            className="w-fit"
+          />
 
           <PlaceSearch onPick={flyTo} />
         </header>
@@ -389,12 +457,25 @@ export default function LocationPage() {
                 {area !== null ? (
                   <>
                     <p className="mt-1 text-[clamp(1.05rem,2vw,1.5rem)] font-semibold tracking-tight text-ink-1">
-                      Boundary drawn
+                      {/* The authoritative server figure replaces the client
+                          guess the instant it arrives, never blended with it. */}
+                      {formatAreaSqFt(savedAreaSqFt ?? estimateAreaSqFt(area))}
                     </p>
-                    <p className="tabular mt-0.5 text-xs text-ink-3">
-                      About {spanKm(area).toFixed(0)} km across · centre{' '}
-                      {((area.south + area.north) / 2).toFixed(2)},{' '}
-                      {((area.west + area.east) / 2).toFixed(2)}
+                    <p className="mt-0.5 text-xs text-ink-3">
+                      {siteBounds === null ? '—' : formatSpan(siteBounds)} across ·{' '}
+                      {area.length} corners
+                    </p>
+                    <SaveStatusBadge status={saveStatus} error={saveError} />
+                  </>
+                ) : previewArea !== null ? (
+                  <>
+                    <p className="mt-1 text-[clamp(1.05rem,2vw,1.5rem)] font-semibold tracking-tight text-atmos">
+                      {formatAreaSqFt(estimateAreaSqFt(previewArea))}
+                    </p>
+                    <p className="mt-0.5 text-xs text-ink-3">
+                      {previewArea.length < 4
+                        ? `${String(previewArea.length)} of at least 3 corners`
+                        : `${String(previewArea.length)} corners · click the first to close`}
                     </p>
                   </>
                 ) : (
@@ -420,6 +501,7 @@ export default function LocationPage() {
                   type="button"
                   onClick={() => {
                     setArea(null);
+                    resetSiteState();
                   }}
                   className="text-xs font-medium text-ink-3 underline underline-offset-4"
                 >
@@ -484,6 +566,7 @@ export default function LocationPage() {
                   // Naming a district replaces any drawn box, for the same reason
                   // drawing clears the name: the two are alternatives.
                   setArea(null);
+                  resetSiteState();
                   setBrowsing(false);
                 }}
                 className={`w-full rounded-lg px-3 py-2.5 text-left text-sm transition-colors ${
@@ -505,6 +588,45 @@ export default function LocationPage() {
       </Popup>
     </div>
   );
+}
+
+/**
+ * Says whether the drawn boundary actually made it to the database.
+ *
+ * Never a bare "Saved" with nothing behind it — CLAUDE.md's rule against
+ * fabricated states applies to this exactly: the badge only says saved once the
+ * server has confirmed the write, and it says plainly when that write failed
+ * rather than pretending it succeeded.
+ */
+function SaveStatusBadge({ status, error }: { status: SaveStatus; error: unknown }) {
+  if (status === 'idle') {
+    return null;
+  }
+
+  if (status === 'saving') {
+    return (
+      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-ink-3">
+        <span
+          aria-hidden="true"
+          className="h-2.5 w-2.5 animate-spin rounded-full border border-white/25 border-t-atmos"
+        />
+        Saving to the database…
+      </p>
+    );
+  }
+
+  if (status === 'saved') {
+    return (
+      <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-band-good">
+        <span aria-hidden="true">✓</span>
+        Saved to the database
+      </p>
+    );
+  }
+
+  const message =
+    error instanceof ApiError ? error.message : "Couldn't save this boundary. You can still continue.";
+  return <p className="mt-1.5 text-[11px] text-band-poor">{message}</p>;
 }
 
 /**

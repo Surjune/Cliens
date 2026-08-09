@@ -493,3 +493,68 @@ gdg/
 ---
 
 *Built to assist with modern, data-driven building construction and lifecycle planning.*
+
+---
+
+## Tamil voice narration (Sarvam AI)
+
+Every question in the flow can be read aloud in Tamil, with all of its options, so
+a user can listen instead of read and then pick an option themselves. The voice
+explains; it never selects.
+
+### Setup
+
+Two keys from two Sarvam accounts. Put them in `.env` at the repository root:
+
+```
+SARVAM_API_KEY_PRIMARY=sk_...
+SARVAM_API_KEY_SECONDARY=sk_...
+SARVAM_TTS_SPEAKER=kavitha
+SARVAM_TTS_LANGUAGE=ta-IN
+```
+
+Get keys from https://dashboard.sarvam.ai/. Both are **optional**: with neither
+set, the Listen buttons and the language toggle simply do not appear and every
+question stays fully usable as text.
+
+### Choosing a speaker
+
+`SARVAM_TTS_SPEAKER` must be a voice the model actually offers, and that list is
+narrower than the general one in Sarvam's docs — `anushka`, which the docs feature
+prominently, is rejected by `bulbul:v3`. Verified working for Tamil:
+
+| Voice | |
+| --- | --- |
+| `kavitha` | female, deliberate — the default, best suited to reading questions |
+| `shruti`, `ritu`, `roopa` | female alternatives |
+| `anand`, `vijay` | male; brisker delivery |
+
+If Sarvam rejects a speaker the error names every valid one, so the fastest way to
+re-check is to set a deliberately wrong value and read the response.
+
+### How the two keys are used
+
+The primary key is used until Sarvam reports that it is spent — HTTP 429, 402 or
+403. The client then switches to the secondary **on that same request**, so the
+user hears no gap, and stays on it for the rest of the process rather than
+rediscovering the limit on a later sentence.
+
+Any other error (a 400 from a bad speaker name, say) is *not* retried on the second
+key: it would spend a second quota to produce the same error twice.
+
+If both keys are exhausted the endpoint returns `VOICE_UNAVAILABLE`, the Listen
+button disappears, and the form carries on as text. Voice never blocks a question.
+
+Server-side logs record which key position is active and when a switch happens;
+they never contain key material.
+
+### Cost and caching
+
+Synthesised audio is cached by a hash of its text, in the browser and on the
+server, so each question is synthesised once. Changing a question's wording
+produces a new key and the old audio ages out. The REST endpoint caps text at 2500
+characters, so a long narration is split on sentence boundaries and the pieces are
+joined into a single WAV before playback — one audio source, no gap between chunks.
+
+The Tamil script lives in one file, `frontend/src/lib/narration.ta.ts`, so it can
+be reviewed against the English in one sitting.

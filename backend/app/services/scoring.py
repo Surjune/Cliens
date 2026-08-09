@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core import constants
+from app.core import calculations, constants
 from app.core.logging import get_logger
 from app.ml.quality_score import QualityScoreModel
 from app.repositories.district_profiles import DistrictClimateProfile
@@ -73,6 +73,46 @@ class ScoredSelection:
             if self.score <= upper:
                 return label
         return constants.SCORE_BAND_THRESHOLDS[-1][0]
+
+    @property
+    def service_life_years(self) -> float:
+        """Estimated years of service, from the code's own 50-year baseline.
+
+        Derived from the compliance findings rather than recomputed from the
+        specification: the rules engine has already resolved which exposure class
+        applies and what it demands, and asking that question twice is how the two
+        answers drift apart.
+        """
+        # Seeded so that, if the w/c finding were ever absent, required equals
+        # provided and the diffusion term is exactly 1.0 — the estimate falls back
+        # to the plain design life rather than to an invented ratio that would
+        # silently claim the mix is better or worse than the code's baseline.
+        provided_ratio = self.selection.concrete.water_cement_ratio
+        required_ratio = provided_ratio
+        worst_shortfall = 0.0
+
+        for finding in self.assessment.findings:
+            if finding.parameter == "water_cement_ratio":
+                required_ratio = finding.required
+                provided_ratio = finding.provided
+            elif not finding.compliant and finding.required > 0:
+                # Shortfall as a positive fraction of what was required. The
+                # walling check reports a suitability score on the same footing,
+                # so it counts here too — an unsuitable wall in a wet climate is a
+                # durability problem, not a cosmetic one.
+                shortfall = (finding.required - finding.provided) / finding.required
+                worst_shortfall = max(worst_shortfall, shortfall)
+
+        return calculations.estimated_service_life_years(
+            required_water_cement_ratio=required_ratio,
+            provided_water_cement_ratio=provided_ratio,
+            worst_other_shortfall_ratio=worst_shortfall,
+        )
+
+    @property
+    def service_life_interval(self) -> tuple[float, float]:
+        """Plausible band around ``service_life_years``."""
+        return calculations.service_life_interval(self.service_life_years)
 
 
 @dataclass(frozen=True, slots=True)

@@ -35,7 +35,7 @@ from app.core.logging import (
 from app.core.rate_limit import FixedWindowRateLimiter
 from app.external.http import close_client as close_http_client
 from app.ml.registry import try_load_registry
-from app.routes import basemap, health, materials, reports, scoring
+from app.routes import basemap, health, materials, reports, scoring, sites, voice
 from app.schemas.common import ErrorResponse
 
 logger = get_logger(__name__)
@@ -285,6 +285,11 @@ def _build_lifespan(
             environment=settings.environment,
             gemini_configured=settings.gemini_configured,
             earth_engine_configured=settings.earth_engine_configured,
+            # Key count rather than the keys themselves: enough to tell "not
+            # configured" from "one key, no failover" from "both", without ever
+            # putting credential material in a log line.
+            voice_keys=len(settings.sarvam_keys),
+            voice_speaker=settings.sarvam_tts_speaker,
         )
         try:
             yield
@@ -354,6 +359,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(scoring.router, prefix=API_PREFIX)
     app.include_router(reports.router, prefix=API_PREFIX)
     app.include_router(basemap.router, prefix=API_PREFIX)
+    app.include_router(voice.router, prefix=API_PREFIX)
+    app.include_router(sites.router, prefix=API_PREFIX)
 
     return app
 

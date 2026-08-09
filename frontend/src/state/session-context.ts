@@ -8,6 +8,8 @@
  */
 import { createContext, useContext } from 'react';
 
+import type { LatLon } from '@/lib/geo';
+
 import type { ConcreteMixInput, DistrictList, ElementSituation } from '@/types/api';
 
 export interface SiteSpecification {
@@ -19,13 +21,15 @@ export interface SiteSpecification {
   evaluateOwnMaterials: boolean;
 }
 
-/** A site boundary drawn on the globe, in WGS84 degrees. */
-export interface Area {
-  south: number;
-  north: number;
-  west: number;
-  east: number;
-}
+/**
+ * A site outline drawn on the globe or the map: its vertices, in order.
+ *
+ * Stored as the real outline rather than a bounding box because the area shown
+ * to the user is computed from it, and a box around a triangular plot claims
+ * roughly double its true size. The climate lookup still uses the bounding box,
+ * but that is derived where it is needed rather than stored in its place.
+ */
+export type Area = readonly LatLon[];
 
 export interface SessionValue {
   spec: SiteSpecification;
@@ -33,7 +37,7 @@ export interface SessionValue {
   updateConcrete: (patch: Partial<ConcreteMixInput>) => void;
   reset: () => void;
   /**
-   * The drawn site boundary, when the user picked by dragging rather than by name.
+   * The drawn site outline, when the user picked by plotting rather than by name.
    *
    * Kept beside the specification rather than inside it because the two lead to
    * different endpoints: an area scores through `/score/area`, which reports how

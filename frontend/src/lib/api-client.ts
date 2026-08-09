@@ -13,6 +13,8 @@ import type {
   MaterialSelectionInput,
   PinResolution,
   ScoreResponse,
+  SiteResponse,
+  VoiceCapabilities,
 } from '@/types/api';
 
 /** Same origin; Vite proxies `/api` to the backend in development. */
@@ -140,6 +142,57 @@ export const apiClient = {
     return request<BasemapCapabilities>('/basemap');
   },
 
+  /**
+   * Save a drawn outline and get back its authoritative area.
+   *
+   * Takes the real polygon, not a bounding box: the area returned here is the
+   * figure shown to the user, and a box around a triangular plot would claim
+   * roughly double its true size.
+   *
+   * A side effect, not part of scoring: the score endpoints stay pure functions
+   * of their inputs, and this is the one call in the app that writes to the
+   * database. Its own failure (an implausible area, the database being down) is
+   * shown as its own state, never as a reason to block the scoring flow — the
+   * user can carry on with the site they drew whether or not it saved.
+   */
+  saveSite(ring: number[][], label?: string): Promise<SiteResponse> {
+    return request<SiteResponse>('/sites', {
+      method: 'POST',
+      body: JSON.stringify({
+        geometry: { type: 'Polygon', coordinates: [ring] },
+        label: label ?? null,
+      }),
+    });
+  },
+
+  /** Whether the server can synthesise Tamil narration at all. */
+  getVoiceCapabilities(): Promise<VoiceCapabilities> {
+    return request<VoiceCapabilities>('/voice/capabilities');
+  },
+
+  /**
+   * Fetch spoken Tamil for a question and its options.
+   *
+   * Goes direct rather than through `request`, which decodes JSON — this endpoint
+   * returns a WAV file. A failure here is deliberately thrown plain: the caller
+   * hides the control rather than showing an error, because the question is
+   * already on screen as text.
+   */
+  async narrate(text: string): Promise<Blob> {
+    const response = await fetch(`${API_BASE}/voice/narrate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text }),
+    });
+    if (!response.ok) {
+      throw new ApiError('Voice narration is unavailable.', {
+        code: 'VOICE_UNAVAILABLE',
+        status: response.status,
+      });
+    }
+    return response.blob();
+  },
+
   /** Find a place, address or postcode anywhere on Earth. */
   geocode(query: string): Promise<GeocodeResults> {
     return request<GeocodeResults>(`/geocode?q=${encodeURIComponent(query)}`);
@@ -196,25 +249,50 @@ export const apiClient = {
     materials: MaterialSelectionInput | null,
     situation: MaterialSelectionInput['element_situation']
   ): Promise<Blob> {
-    const response = await fetch(`${API_BASE}/reports`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ district, materials, element_situation: situation }),
-    });
+    return reportBlob('/reports', { district, materials, element_situation: situation });
+  },
 
-    if (!response.ok) {
-      const body: unknown = await response.json().catch(() => null);
-      if (isErrorEnvelope(body)) {
-        throw new ApiError(body.error.message, {
-          code: body.error.code,
-          status: response.status,
-        });
-      }
-      throw new ApiError('The report could not be generated.', {
-        code: 'REPORT_FAILED',
+  /**
+   * The same report for a drawn outline.
+   *
+   * A separate endpoint because a drawn site has no district name, and the
+   * district report requires one — sending an empty string failed validation
+   * before it reached the engine.
+   */
+  async downloadAreaReport(
+    area: AreaBounds,
+    materials: MaterialSelectionInput | null,
+    situation: MaterialSelectionInput['element_situation']
+  ): Promise<Blob> {
+    return reportBlob('/reports/area', { area, materials, element_situation: situation });
+  },
+};
+
+/**
+ * Fetch a PDF.
+ *
+ * Goes direct rather than through `request`, which decodes JSON — these endpoints
+ * stream a binary file.
+ */
+async function reportBlob(path: string, payload: unknown): Promise<Blob> {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const body: unknown = await response.json().catch(() => null);
+    if (isErrorEnvelope(body)) {
+      throw new ApiError(body.error.message, {
+        code: body.error.code,
         status: response.status,
       });
     }
-    return response.blob();
-  },
-};
+    throw new ApiError('The report could not be generated.', {
+      code: 'REPORT_FAILED',
+      status: response.status,
+    });
+  }
+  return response.blob();
+}
