@@ -77,6 +77,15 @@ aws s3 cp "$BUILD_DIR/site.tar.gz" "s3://$BUCKET/site.tar.gz" --region "$REGION"
 # The build happens on the instance. Every heavy dependency ships prebuilt
 # manylinux wheels for both architectures, so this is a download rather than a
 # compile, and it avoids cross-architecture emulation entirely.
+#
+# `set -eux` without pipefail: SSM's AWS-RunShellScript executes these under
+# /bin/sh, which on Ubuntu is dash, and dash has no `set -o pipefail`. There are
+# no pipelines below, so nothing is lost by leaving it out.
+#
+# The docker build writes its output to a file on the instance rather than to
+# stdout, and only the tail is echoed on failure. SSM truncates an invocation's
+# output at 24 KB, and a build log is far larger than that — which meant the
+# actual error was always the part that got cut off.
 say "Building and starting on the instance (a few minutes on first run)"
 
 COMMAND_ID="$(aws ssm send-command \
@@ -86,7 +95,7 @@ COMMAND_ID="$(aws ssm send-command \
   --comment "Building Quality Score deploy" \
   --timeout-seconds 1800 \
   --parameters commands="[
-    \"set -euxo pipefail\",
+    \"set -eux\",
     \"cd /opt/bqs\",
     \"for i in \$(seq 1 60); do [ -f /opt/bqs/.provisioned ] && break; echo waiting-for-cloud-init; sleep 5; done\",
     \"aws s3 cp s3://$BUCKET/backend.tar.gz /opt/bqs/backend.tar.gz --region $REGION\",
@@ -98,9 +107,10 @@ COMMAND_ID="$(aws ssm send-command \
     \"cp /opt/bqs/build/deploy/docker-compose.prod.yml /opt/bqs/docker-compose.yml\",
     \"cp /opt/bqs/build/deploy/Caddyfile /opt/bqs/Caddyfile\",
     \"chown -R ubuntu:ubuntu /opt/bqs\",
-    \"cd /opt/bqs/build && docker build -f backend/Dockerfile -t bqs-backend:latest .\",
-    \"cd /opt/bqs && docker compose --env-file .env -f docker-compose.yml up -d --remove-orphans\",
-    \"docker image prune -f\"
+    \"cd /opt/bqs/build && (docker build -f backend/Dockerfile -t bqs-backend:latest . > /var/log/bqs-build.log 2>&1 || (echo BUILD FAILED; tail -40 /var/log/bqs-build.log; exit 1))\",
+    \"cd /opt/bqs && (docker compose --env-file .env -f docker-compose.yml up -d --remove-orphans > /var/log/bqs-up.log 2>&1 || (echo COMPOSE FAILED; tail -40 /var/log/bqs-up.log; exit 1))\",
+    \"docker image prune -f > /dev/null 2>&1 || true\",
+    \"docker compose -f /opt/bqs/docker-compose.yml ps\"
   ]" \
   --query 'Command.CommandId' --output text)"
 

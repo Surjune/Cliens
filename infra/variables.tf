@@ -14,18 +14,24 @@ variable "instance_type" {
   description = <<-EOT
     EC2 instance type.
 
-    t4g.small (ARM, 2 GB) is the recommendation: scikit-learn plus the loaded
-    model plus Postgres in a sibling container does not fit comfortably in the
-    1 GB of a t4g.micro, and the model is unpickled into memory at startup.
-    Graviton is roughly 20% cheaper than the x86 equivalent, and the image builds
-    for arm64 without changes.
+    Must be x86_64. The official postgis/postgis:16-3.4 image is published for
+    amd64 only — on Graviton it pulls the amd64 image and dies with
+    "exec format error" before Postgres ever starts. Graviton would be about 20%
+    cheaper, but the alternative is an unofficial multi-arch PostGIS build, and
+    that is not a trade worth making for the database.
+
+    t3.small (2 GB) is the floor: scikit-learn plus the unpickled model plus
+    Postgres in a sibling container does not fit in the 1 GB of a micro.
   EOT
   type        = string
-  default     = "t4g.small"
+  default     = "t3.small"
 
   validation {
-    condition     = can(regex("^(t4g|t3|t3a|m7g|m6i)\\.", var.instance_type))
-    error_message = "Use a t4g/t3/t3a/m7g/m6i instance type; the AMI lookup keys off the family."
+    # x86_64 families only, for the PostGIS reason above. Graviton is rejected
+    # here rather than left to fail at container start, where it surfaces as a
+    # bare "exec format error" with nothing pointing at the cause.
+    condition     = can(regex("^(t3|t3a|m6i|m6a|c6i)\\.", var.instance_type))
+    error_message = "Use an x86_64 type (t3/t3a/m6i/m6a/c6i): the official PostGIS image has no arm64 build."
   }
 }
 

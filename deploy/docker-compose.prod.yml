@@ -41,6 +41,12 @@ services:
       ENVIRONMENT: production
       LOG_LEVEL: INFO
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      # Both are required. The app connects with asyncpg, but Alembic is
+      # synchronous and reads its own `database_url_sync` setting — which has its
+      # own default pointing at the local dev database. Setting only the async one
+      # left migrations silently trying to reach localhost:5433 inside the
+      # container, where nothing listens.
+      DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # Same-origin through Caddy, but the config still requires a non-empty,
       # non-wildcard origin list in production, so it is stated explicitly.
       CORS_ORIGINS: ${PUBLIC_ORIGIN}

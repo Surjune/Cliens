@@ -61,3 +61,23 @@ ml/data/*.csv
 .env.local
 build/
 *.pyc
+
+# ---------------------------------------------------------------------------
+# Terraform
+#
+# tfvars holds the database password and the API keys in plaintext, and state
+# holds every value Terraform has ever written — including those secrets, even
+# though they are marked sensitive in the plan output.
+# ---------------------------------------------------------------------------
+*.tfvars
+!*.tfvars.example
+*.tfstate
+*.tfstate.*
+# Saved plan files are zip archives containing tfstate and the resolved values of
+# every variable — including the ones marked sensitive. Verified: a plan for this
+# stack contains the database password and the Sarvam key in readable form.
+tfplan
+*.tfplan
+.terraform/
+.terraform.lock.hcl
+crash.log

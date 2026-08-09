@@ -12,16 +12,24 @@
 locals {
   parameter_prefix = "/building-quality-score/${var.environment}"
 
-  # Only non-empty secrets become parameters. Sarvam and Mapbox are genuinely
-  # optional: the app degrades to no voice and to zoom-19 imagery without them,
-  # so writing empty parameters would create things that exist but mean nothing.
-  optional_secrets = {
-    for name, value in {
-      sarvam_api_key_primary   = var.sarvam_api_key_primary
-      sarvam_api_key_secondary = var.sarvam_api_key_secondary
-      mapbox_access_token      = var.mapbox_access_token
-    } : name => value if value != ""
+  optional_secret_values = {
+    sarvam_api_key_primary   = var.sarvam_api_key_primary
+    sarvam_api_key_secondary = var.sarvam_api_key_secondary
+    mapbox_access_token      = var.mapbox_access_token
   }
+
+  # Which optional secrets were actually supplied. Sarvam and Mapbox are genuinely
+  # optional — the app degrades to no voice and to zoom-19 imagery without them —
+  # so writing empty parameters would create things that exist but mean nothing.
+  #
+  # `nonsensitive` wraps the emptiness test, never the value. for_each keys become
+  # resource addresses, so Terraform refuses a set derived from sensitive data;
+  # whether a key was provided is not itself a secret, but its contents are, and
+  # those stay marked all the way into the parameter below.
+  present_optional_secrets = toset([
+    for name, value in local.optional_secret_values : name
+    if nonsensitive(value) != ""
+  ])
 }
 
 resource "aws_ssm_parameter" "postgres_password" {
@@ -32,9 +40,9 @@ resource "aws_ssm_parameter" "postgres_password" {
 }
 
 resource "aws_ssm_parameter" "optional" {
-  for_each = local.optional_secrets
+  for_each = local.present_optional_secrets
 
   name  = "${local.parameter_prefix}/${each.key}"
   type  = "SecureString"
-  value = each.value
+  value = local.optional_secret_values[each.key]
 }

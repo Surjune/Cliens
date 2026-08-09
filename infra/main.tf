@@ -66,8 +66,10 @@ data "aws_ami" "ubuntu" {
     values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-*-server-*"]
   }
 
+  # x86_64 only. See the note on var.instance_type: the official PostGIS image
+  # is amd64-only, so the whole stack is pinned to that architecture.
   filter {
     name   = "architecture"
-    values = [startswith(var.instance_type, "t4g.") ? "arm64" : "x86_64"]
+    values = ["x86_64"]
   }
 }
