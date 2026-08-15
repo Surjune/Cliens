@@ -11,9 +11,11 @@
     "frontend"
   ],
   "scripts": {
-    "db:up": "docker compose up -d",
-    "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d",
+    "db:up": "docker compose -f config/docker-compose.yml --project-directory . up -d",
+    "db:down": "docker compose -f config/docker-compose.yml --project-directory . down",
+    "db:reset": "docker compose -f config/docker-compose.yml --project-directory . down -v && npm run db:up",
+    "hooks:install": "node scripts/py.mjs -m pre_commit install --config config/.pre-commit-config.yaml",
+    "hooks:run": "node scripts/py.mjs -m pre_commit run --config config/.pre-commit-config.yaml --all-files",
     "db:migrate": "node scripts/py.mjs -m alembic upgrade head",
     "db:seed": "node scripts/py.mjs -m app.cli seed-materials",
     "dev:backend": "node scripts/py.mjs -m uvicorn app.main:app --reload --port 8010",

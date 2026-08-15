@@ -3,13 +3,21 @@
 # Only the database runs here. The backend and frontend run on the host so that
 # reload-on-save stays fast; see README "Running the project".
 #
-#   docker compose up -d          start both databases
-#   docker compose down           stop them, keep data
-#   docker compose down -v        stop them and DESTROY all data
+#   npm run db:up       start both databases
+#   npm run db:down     stop them, keep data
+#   npm run db:reset    stop them, DESTROY all data, start again
+#
+# This file lives in config/ rather than the repository root, so a direct
+# `docker compose` call needs `-f config/docker-compose.yml --project-directory .`.
+# The project directory is what compose reads `.env` from and what it derives the
+# volume-name prefix from; pointing it at the root keeps both unchanged. The
+# explicit `name:` below pins the project name even when that flag is omitted.
 #
 # Two databases are defined deliberately: `db` holds development data and `test-db`
 # is torn down and recreated by the integration test suite. Sharing one database
 # between the two would make test runs destroy development state.
+
+name: cliens
 
 services:
   db:

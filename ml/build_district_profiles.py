@@ -33,7 +33,7 @@ from common import DATA_DIR, REPO_ROOT, git_commit_sha
 
 from app.core import constants
 
-GRIB_PATH: Final[Path] = REPO_ROOT / "8aaec5328953b7530059b685abefc9b9" / "data.grib"
+GRIB_PATH: Final[Path] = DATA_DIR / "data.grib"
 OUTPUT_PATH: Final[Path] = (
     REPO_ROOT / "backend" / "app" / "repositories" / "data" / "district_climate_profiles.json"
 )

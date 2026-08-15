@@ -1,6 +1,12 @@
 # Pre-commit hooks. Install once after setup:
 #
-#   node scripts/py.mjs -m pre_commit install
+#   npm run hooks:install
+#
+# This file lives in config/ rather than the repository root, so every pre-commit
+# invocation needs `--config config/.pre-commit-config.yaml`. The npm scripts
+# `hooks:install` and `hooks:run` pass it; a bare `pre-commit run` will not find
+# this file. Hook `entry` commands and the `files:` patterns below are unaffected —
+# both still resolve from the repository root, which is where pre-commit runs them.
 #
 # Hooks use `repo: local` with `language: system` because the Python tools must run
 # from the project virtualenv (so they see the same dependency versions and the same

@@ -234,7 +234,7 @@ selects.
 
 ```bash
 # 1. Database
-docker compose up -d
+npm run db:up
 
 # 2. Configuration
 cp .env.example .env        # Sarvam keys optional
