@@ -49,7 +49,10 @@ services:
       DATABASE_URL_SYNC: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       # Same-origin through Caddy, but the config still requires a non-empty,
       # non-wildcard origin list in production, so it is stated explicitly.
-      CORS_ORIGINS: ${PUBLIC_ORIGIN}
+      # The variable name must match the setting (`cors_allowed_origins`); it was
+      # previously CORS_ORIGINS, which the app ignored, so production silently
+      # fell back to the development origins.
+      CORS_ALLOWED_ORIGINS: ${PUBLIC_ORIGIN}
       # Caddy is the only thing that talks to this container, and it sits on the
       # compose network. Trusting its forwarded headers is what makes the per-IP
       # rate limiter see real client addresses instead of the proxy's.

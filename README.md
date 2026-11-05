@@ -248,6 +248,21 @@ npm run dev:backend         # http://localhost:8010
 npm run dev:frontend        # http://localhost:5173
 ```
 
+### Production mode on your machine
+
+Runs the same three containers as the server — the built API image, PostGIS and
+Caddy serving the compiled frontend — with no dev servers or reloaders:
+
+```bash
+cp .env.example .env        # if you have not already
+npm run prod:up             # builds everything; open http://localhost
+npm run prod:logs           # follow the logs
+npm run prod:down           # stop (data is kept)
+```
+
+It uses its own Compose project and volumes, so it never touches the dev
+database. Port 80 must be free.
+
 ---
 
 ## 9. Deployment
