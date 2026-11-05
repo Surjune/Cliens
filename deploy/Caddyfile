@@ -11,12 +11,13 @@
 	# tile and voice endpoints, which stream binary responses.
 	handle /api/* {
 		reverse_proxy api:8000 {
-			# The backend runs uvicorn with --proxy-headers, so these are what let
-			# the per-IP rate limiter see the real client rather than counting every
-			# request against Caddy's address.
+			# The backend runs uvicorn with --proxy-headers, so forwarded headers are
+			# what let the per-IP rate limiter see the real client rather than
+			# counting every request against Caddy's address. Caddy sets
+			# X-Forwarded-For and X-Forwarded-Proto itself, replacing any value the
+			# client sent (no trusted_proxies are configured), so they cannot be
+			# spoofed and setting them again here only produced startup warnings.
 			header_up X-Real-IP {remote_host}
-			header_up X-Forwarded-For {remote_host}
-			header_up X-Forwarded-Proto {scheme}
 
 			# Voice synthesis can take several seconds for a long narration, and the
 			# tile compositor waits on two upstream fetches. The default read
