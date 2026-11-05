@@ -33,33 +33,19 @@ from sklearn.model_selection import train_test_split
 
 from common import MODELS_DIR, artifact_name, constants, evaluate, write_metrics_report
 
+from app.ml.quality_score import ADMIXTURE_FEATURES, FEATURE_COLUMNS, build_features
 from app.repositories.district_profiles import load_climate_profiles
 from app.repositories.knowledge_base import load_knowledge_base
 from app.services.climate_data import ClimateDataService
 from app.services.rules_engine import (
     ConcreteMix,
+    ElementSituation,
     MaterialSelection,
     assess,
     quality_score_label,
 )
 
 MODEL_NAME = "quality_score"
-
-# Positional order is part of the artifact's contract; inference rebuilds the
-# matrix from this list so a reordering cannot silently mis-predict.
-FEATURE_COLUMNS = [
-    "mean_relative_humidity_percent",
-    "wetness_index",
-    "wet_dry_cycles_per_year",
-    "max_wind_gust_ms",
-    "mean_max_temperature_c",
-    "distance_to_coast_km",
-    "situation_severity",
-    "grade_mpa",
-    "cement_content_kg_m3",
-    "water_cement_ratio",
-    "walling_absorption_percent",
-]
 TARGET_COLUMN = "quality_score"
 
 # Sampled material space. Deliberately wider than any sensible specification so
@@ -68,10 +54,11 @@ TARGET_COLUMN = "quality_score"
 GRADES = ["M15", "M20", "M25", "M30", "M35", "M40", "M45"]
 CEMENT_CONTENTS = [260.0, 280.0, 300.0, 320.0, 340.0, 360.0, 380.0]
 WATER_CEMENT_RATIOS = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
-SITUATIONS = ["enclosed", "sheltered", "exposed", "buried"]
+# Every situation the API accepts. Tidal used to be missing, so every tidal score
+# was an extrapolation — measured at 22 points off the rules on average.
+SITUATIONS: list[ElementSituation] = ["enclosed", "sheltered", "exposed", "buried", "tidal"]
 CEMENT_TYPES = ["OPC", "PPC", "PSC"]
-
-SITUATION_SEVERITY = {"enclosed": 1, "sheltered": 2, "buried": 2, "exposed": 3, "tidal": 5}
+ADMIXTURES = list(ADMIXTURE_FEATURES.values())
 
 
 def build_dataset() -> pd.DataFrame:
@@ -92,42 +79,33 @@ def build_dataset() -> pd.DataFrame:
         for grade in GRADES:
             for cement in CEMENT_CONTENTS:
                 for ratio in WATER_CEMENT_RATIOS:
-                    # One situation and walling material sampled per mix rather
-                    # than a full cross product: the full grid would be ~1.4M rows
-                    # for no extra signal, since those two axes are independent of
-                    # the mix parameters.
-                    situation = str(rng.choice(SITUATIONS))
-                    walling = str(rng.choice(walling_ids))
-                    cement_type = str(rng.choice(CEMENT_TYPES))
-
-                    selection = MaterialSelection(
-                        concrete=ConcreteMix(
-                            grade=grade,
-                            cement_content_kg_m3=cement,
-                            water_cement_ratio=ratio,
-                            cement_type=cement_type,
-                        ),
-                        walling_material_id=walling,
-                        element_situation=situation,  # type: ignore[arg-type]
-                    )
-                    assessment = assess(summary, selection, knowledge_base)
-
-                    rows.append(
-                        {
-                            "mean_relative_humidity_percent": summary.mean_relative_humidity_percent,
-                            "wetness_index": summary.wetness_index,
-                            "wet_dry_cycles_per_year": summary.wet_dry_cycles_per_year,
-                            "max_wind_gust_ms": summary.max_wind_gust_ms,
-                            "mean_max_temperature_c": summary.mean_max_temperature_c,
-                            "distance_to_coast_km": summary.distance_to_coast_km,
-                            "situation_severity": float(SITUATION_SEVERITY[situation]),
-                            "grade_mpa": float(int(grade[1:])),
-                            "cement_content_kg_m3": cement,
-                            "water_cement_ratio": ratio,
-                            "walling_absorption_percent": absorption.get(walling, 20.0),
-                            TARGET_COLUMN: quality_score_label(assessment),
-                        }
-                    )
+                    # Several situation/walling/cement/admixture draws per mix rather
+                    # than the full cross product: the full grid would be millions
+                    # of rows, and those axes act independently of the mix.
+                    for _ in range(constants.QUALITY_MODEL_DRAWS_PER_MIX):
+                        selection = MaterialSelection(
+                            concrete=ConcreteMix(
+                                grade=grade,
+                                cement_content_kg_m3=cement,
+                                water_cement_ratio=ratio,
+                                cement_type=str(rng.choice(CEMENT_TYPES)),
+                                admixtures=tuple(
+                                    admixture for admixture in ADMIXTURES if rng.random() < 0.5
+                                ),
+                            ),
+                            walling_material_id=str(rng.choice(walling_ids)),
+                            element_situation=SITUATIONS[int(rng.integers(len(SITUATIONS)))],
+                        )
+                        row = build_features(
+                            summary=summary,
+                            selection=selection,
+                            absorption_by_material=absorption,
+                            knowledge_base=knowledge_base,
+                        )
+                        row[TARGET_COLUMN] = quality_score_label(
+                            assess(summary, selection, knowledge_base)
+                        )
+                        rows.append(row)
 
     return pd.DataFrame(rows)
 
@@ -139,7 +117,7 @@ def main() -> int:
     frame = build_dataset()
     print(f"Generated {len(frame)} rules-labelled scenarios", flush=True)
 
-    features = frame[FEATURE_COLUMNS].to_numpy()
+    features = frame[list(FEATURE_COLUMNS)].to_numpy()
     target = frame[TARGET_COLUMN].to_numpy()
 
     features_train, features_test, target_train, target_test = train_test_split(
@@ -150,8 +128,9 @@ def main() -> int:
     )
 
     model = GradientBoostingRegressor(
-        n_estimators=constants.RANKER_MODEL_N_ESTIMATORS,
-        max_depth=constants.RANKER_MODEL_MAX_DEPTH,
+        n_estimators=constants.QUALITY_MODEL_N_ESTIMATORS,
+        max_depth=constants.QUALITY_MODEL_MAX_DEPTH,
+        learning_rate=constants.QUALITY_MODEL_LEARNING_RATE,
         random_state=constants.RANDOM_SEED,
     )
     model.fit(features_train, target_train)
@@ -167,7 +146,7 @@ def main() -> int:
     joblib.dump(
         {
             "model": model,
-            "feature_columns": FEATURE_COLUMNS,
+            "feature_columns": list(FEATURE_COLUMNS),
             "sklearn_version": __import__("sklearn").__version__,
         },
         artifact,

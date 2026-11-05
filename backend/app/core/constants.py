@@ -321,6 +321,17 @@ DAMAGE_MODEL_MIN_SAMPLES_LEAF: Final[int] = 5
 RANKER_MODEL_N_ESTIMATORS: Final[int] = 150
 RANKER_MODEL_MAX_DEPTH: Final[int] = 6
 
+# CALIBRATED. Building Quality Score model. Measured against the rules score it
+# approximates over every district x situation x realistic mix: the previous
+# 150-tree / depth-6 / 1-draw setting averaged 7.5 points off the rules and up to
+# 37 on tidal elements. More trees at a lower learning rate, and several material
+# draws per mix so every walling/cement/admixture combination is seen at every
+# grade, bring that down to the figures recorded in the artifact's metrics JSON.
+QUALITY_MODEL_N_ESTIMATORS: Final[int] = 600
+QUALITY_MODEL_MAX_DEPTH: Final[int] = 6
+QUALITY_MODEL_LEARNING_RATE: Final[float] = 0.08
+QUALITY_MODEL_DRAWS_PER_MIX: Final[int] = 4
+
 # ---------------------------------------------------------------------------
 # IS 456 exposure classification
 #

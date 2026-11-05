@@ -157,8 +157,11 @@ to coast (computed from the land/sea mask in the sea-surface-temperature field).
 A **hybrid**: a deterministic rules engine plus a model that smooths it.
 
 **1. Rules engine — `services/rules_engine.py`**
-Classifies the IS 456 exposure class from the district's measured humidity, wet
-hours and distance to coast, combined with how the element sits. Then checks the
+Classifies the IS 456 exposure class from how the element sits, following
+Table 3 situation by situation: rain, wetting and drying and severe condensation
+escalate only an *exposed* surface, and distance to the coast escalates each
+situation as Table 3 words it (a sheltered element in coastal air is Moderate, an
+exposed one Severe, one in spray reach Very Severe). Then checks the
 proposed mix against **IS 456 Table 5** minimums: concrete grade, cement content,
 maximum water/cement ratio, and walling suitability. Every finding cites its
 standard.
@@ -167,14 +170,20 @@ standard.
 
 | Metric | Value |
 | --- | --- |
-| R² | **0.886** |
-| MAE | **4.34** (on a 0–100 score) |
-| Training samples | 8,702 |
-| Test samples | 2,176 |
+| R² | **0.9999** |
+| MAE | **0.15** (on a 0–100 score) |
+| Training samples | 34,809 |
+| Test samples | 8,703 |
 | Seed | 20231204 (fixed — scoring is deterministic) |
 
-Top feature importances: `grade_mpa` 0.585 · `water_cement_ratio` 0.252 ·
-`cement_content_kg_m3` 0.094 · `walling_absorption_percent` 0.042
+Top feature importances: `exposure_severity` 0.413 · `grade_mpa` 0.297 ·
+`water_cement_ratio` 0.135 · `walling_burnt_clay_brick` 0.089 ·
+`cement_content_kg_m3` 0.054
+
+Measured against the rules score over every district, situation and a range of
+realistic mixes, the headline score is within 0.45 points on average (3.2 at
+worst). Training and inference build features through one shared function,
+`app/ml/quality_score.build_features`. Retrain with `npm run train:models`.
 
 > **What this model is.** It is trained on **scenarios labelled by the rules
 > engine**, not on observed building outcomes. No dataset exists that records

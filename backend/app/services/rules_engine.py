@@ -49,6 +49,40 @@ SITUATION_BASELINE_SEVERITY: dict[str, int] = {
     "tidal": 5,
 }
 
+# Severity inside the coastal-influence band, per situation. IS 456 Table 3 is
+# explicit that salt air matters differently depending on what reaches the
+# surface:
+#
+# * Mild covers protected concrete "except those situated in coastal area", and
+#   Moderate covers concrete "sheltered from saturated salt air in coastal
+#   area" — so protected and sheltered elements near the coast are Moderate;
+# * Severe covers concrete "exposed to coastal environment";
+# * buried concrete near the coast is taken as Severe: the groundwater there is
+#   brackish, and Table 3 treats aggressive ground water as at least as harsh as
+#   a coastal surface. This is a judgement, not a quotation.
+#
+# Previously every situation escalated to Severe on the coast, so an interior
+# column 20 km inland was classed like an exposed facade.
+COASTAL_BAND_SEVERITY: dict[str, int] = {
+    "enclosed": 2,
+    "sheltered": 2,
+    "exposed": 3,
+    "buried": 3,
+    "tidal": 5,
+}
+
+# Severity within direct sea-spray reach. Table 3 puts "exposed to sea water
+# spray" at Very Severe; only surfaces the spray can actually land on qualify.
+# A sheltered element that close is still in saturated salt air, which is the
+# Severe "coastal environment" case rather than the Moderate sheltered one.
+SEA_SPRAY_SEVERITY: dict[str, int] = {
+    "enclosed": 2,
+    "sheltered": 3,
+    "exposed": 4,
+    "buried": 3,
+    "tidal": 5,
+}
+
 GRADE_PATTERN = re.compile(r"^M\s*(\d{2,3})$", re.IGNORECASE)
 
 
@@ -247,6 +281,13 @@ def classify_exposure(
     class — a mild-looking climate never downgrades an inherently harsh situation
     such as a tidal zone.
 
+    Which conditions apply depends on the situation, as it does in IS 456 Table 3.
+    Rain, wetting and drying and severe condensation are properties of a surface
+    the weather reaches, so they escalate only an exposed element. Applying the
+    humidity rule to every situation — as this did before — classed indoor
+    concrete Severe in every district in the dataset, since all of them exceed
+    the humidity threshold, which made the situation answer irrelevant.
+
     Args:
         climate: The district's measured climate.
         situation: How the element sits relative to the weather.
@@ -265,13 +306,13 @@ def classify_exposure(
 
     if climate.distance_to_coast_km <= constants.DIRECT_SEA_SPRAY_KM:
         escalate(
-            4,
-            f"Within {constants.DIRECT_SEA_SPRAY_KM:g} km of the coast, so the surface is "
-            "subject to direct sea-water spray.",
+            SEA_SPRAY_SEVERITY[situation],
+            f"Within {constants.DIRECT_SEA_SPRAY_KM:g} km of the coast, inside direct "
+            "sea-water spray reach.",
         )
     elif climate.distance_to_coast_km <= constants.COASTAL_INFLUENCE_KM:
         escalate(
-            3,
+            COASTAL_BAND_SEVERITY[situation],
             f"{climate.distance_to_coast_km:.0f} km from the coast, inside the "
             f"{constants.COASTAL_INFLUENCE_KM:g} km band where salt-laden air drives "
             "chloride attack.",
@@ -290,13 +331,12 @@ def classify_exposure(
                 f"{climate.wet_dry_cycles_per_year:.0f} wet/dry transitions a year, meeting "
                 "the alternate wetting and drying condition.",
             )
-
-    if climate.mean_relative_humidity_percent >= constants.HIGH_HUMIDITY_PERCENT:
-        escalate(
-            3,
-            f"Mean relative humidity {climate.mean_relative_humidity_percent:.0f}%, at or "
-            "above the level where reinforcement corrosion accelerates.",
-        )
+        if climate.mean_relative_humidity_percent >= constants.HIGH_HUMIDITY_PERCENT:
+            escalate(
+                3,
+                f"Mean relative humidity {climate.mean_relative_humidity_percent:.0f}% on an "
+                "exposed surface, which counts as severe condensation.",
+            )
 
     exposure = base.exposure_by_severity(severity)
     reasons.append(f"Applied exposure class: {exposure.label} ({exposure.standard}).")
@@ -447,19 +487,29 @@ def followed_recommendations(
     Matching is deliberately literal — cement type and admixture names against the
     recommendation's target. A recommendation is only reported as followed when the
     selection actually names the thing it asks for.
+
+    Both sides are normalised to space-separated words first. Walling is chosen by
+    catalogue ID (``aac_block``) while the reference table names it in prose
+    ("AAC blocks or fly-ash bricks"); compared raw, the underscore and the hyphen
+    meant a walling recommendation could never be reported as followed.
     """
     chosen = {
-        selection.concrete.cement_type.upper(),
-        *(a.upper() for a in selection.concrete.admixtures),
+        _normalise_material_name(selection.concrete.cement_type),
+        *(_normalise_material_name(a) for a in selection.concrete.admixtures),
+        _normalise_material_name(selection.walling_material_id),
     }
-    chosen.add(selection.walling_material_id.upper())
 
     followed: list[str] = []
     for recommendation in applicable:
-        target = recommendation.material.upper()
+        target = _normalise_material_name(recommendation.material)
         if any(token in target or target in token for token in chosen if token):
             followed.append(recommendation.id)
     return tuple(followed)
+
+
+def _normalise_material_name(name: str) -> str:
+    """Upper-case, with underscores and hyphens read as word breaks."""
+    return " ".join(name.replace("_", " ").replace("-", " ").upper().split())
 
 
 def assess(

@@ -95,13 +95,16 @@ class ScoredSelection:
             if finding.parameter == "water_cement_ratio":
                 required_ratio = finding.required
                 provided_ratio = finding.provided
-            elif not finding.compliant and finding.required > 0:
-                # Shortfall as a positive fraction of what was required. The
-                # walling check reports a suitability score on the same footing,
-                # so it counts here too — an unsuitable wall in a wet climate is a
-                # durability problem, not a cosmetic one.
-                shortfall = (finding.required - finding.provided) / finding.required
-                worst_shortfall = max(worst_shortfall, shortfall)
+            elif not finding.compliant:
+                # Shortfall as a positive fraction, read from the finding's signed
+                # margin. For grade and cement content that equals
+                # (required - provided) / required. The walling check must count
+                # too — an unsuitable wall in a wet climate is a durability
+                # problem, not a cosmetic one — but its required/provided are the
+                # climate's humidity against a threshold, so deriving the
+                # shortfall from them came out negative and the mismatch never
+                # shortened the estimate. Its margin carries the penalty instead.
+                worst_shortfall = max(worst_shortfall, -finding.margin_ratio)
 
         return calculations.estimated_service_life_years(
             required_water_cement_ratio=required_ratio,

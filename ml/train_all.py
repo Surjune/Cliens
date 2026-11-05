@@ -1,20 +1,21 @@
 """Runs every training script in order; the entry point behind ``npm run train:models``.
 
-Both models are trained from the same seeded generator, so a full retrain is
-reproducible: the same code on the same day produces identical artifacts.
+Training is seeded, so a full retrain is reproducible: the same code on the same
+day produces identical artifacts.
+
+This previously imported ``train_damage_calibration`` and
+``train_material_ranker``, neither of which exists in the repository, so
+``npm run train:models`` failed on import and the only model the app loads was
+never retrained by it.
 """
 
 from __future__ import annotations
 
 import sys
 
-import train_damage_calibration
-import train_material_ranker
+import train_quality_score
 
-TRAINERS = (
-    ("damage calibration", train_damage_calibration.main),
-    ("material ranker", train_material_ranker.main),
-)
+TRAINERS = (("quality score", train_quality_score.main),)
 
 
 def main() -> int:

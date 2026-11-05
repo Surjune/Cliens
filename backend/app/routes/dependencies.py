@@ -90,7 +90,7 @@ def get_scoring_service(climate: ClimateServiceDep) -> QualityScoringService:
     }
     return QualityScoringService(
         climate=climate,
-        model=QualityScoreModel(get_registry().quality, absorption),
+        model=QualityScoreModel(get_registry().quality, absorption, knowledge_base),
         knowledge_base=knowledge_base,
     )
 

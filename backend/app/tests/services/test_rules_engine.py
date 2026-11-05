@@ -18,6 +18,7 @@ from app.repositories.knowledge_base import KnowledgeBaseError, load_knowledge_b
 from app.services.rules_engine import (
     ClimateSummary,
     ConcreteMix,
+    ElementSituation,
     MaterialSelection,
     assess,
     check_mix_compliance,
@@ -144,10 +145,70 @@ class TestExposureClassification:
         result = classify_exposure(climate(cycles=120.0), "exposed")
         assert result.exposure.id == "severe"
 
-    def test_high_humidity_escalates_even_when_sheltered(self) -> None:
-        """Condensation-driven corrosion does not require direct rain."""
-        result = classify_exposure(climate(humidity=85.0), "sheltered")
-        assert result.exposure.severity >= 3
+    def test_high_humidity_on_an_exposed_surface_is_severe(self) -> None:
+        """Table 3 lists 'severe condensation' under Severe for exposed concrete."""
+        result = classify_exposure(climate(humidity=85.0), "exposed")
+        assert result.exposure.id == "severe"
+
+    @pytest.mark.parametrize(
+        ("situation", "expected"),
+        [("enclosed", "mild"), ("sheltered", "moderate"), ("buried", "moderate")],
+    )
+    def test_humidity_does_not_escalate_a_protected_element(
+        self, situation: ElementSituation, expected: str
+    ) -> None:
+        """Every district in the dataset is above the humidity threshold.
+
+        If humidity escalated every situation, indoor concrete would be Severe
+        everywhere and the situation answer would change nothing.
+        """
+        result = classify_exposure(climate(humidity=88.0), situation)
+        assert result.exposure.id == expected
+
+    @pytest.mark.parametrize(
+        ("situation", "expected"),
+        [
+            # "Protected ... except those situated in coastal area" -> not Mild.
+            ("enclosed", "moderate"),
+            # "Sheltered from saturated salt air in coastal area" -> Moderate.
+            ("sheltered", "moderate"),
+            # "Exposed to coastal environment" -> Severe.
+            ("exposed", "severe"),
+            # Brackish ground water near the coast.
+            ("buried", "severe"),
+            ("tidal", "extreme"),
+        ],
+    )
+    def test_coastal_band_follows_table_3_per_situation(
+        self, situation: ElementSituation, expected: str
+    ) -> None:
+        result = classify_exposure(climate(coast_km=10.0), situation)
+        assert result.exposure.id == expected
+
+    @pytest.mark.parametrize(
+        ("situation", "expected"),
+        [
+            ("enclosed", "moderate"),
+            ("sheltered", "severe"),
+            ("exposed", "very_severe"),
+            ("buried", "severe"),
+            ("tidal", "extreme"),
+        ],
+    )
+    def test_sea_spray_reaches_only_unprotected_surfaces(
+        self, situation: ElementSituation, expected: str
+    ) -> None:
+        result = classify_exposure(climate(coast_km=0.5), situation)
+        assert result.exposure.id == expected
+
+    def test_situation_changes_the_class_in_a_real_inland_district(self) -> None:
+        """Karur's measured climate: 77.5% humidity, 176 km from the coast."""
+        karur = climate(humidity=77.5, wetness=0.089, cycles=44.2, coast_km=176.2)
+        situations: tuple[ElementSituation, ...] = ("enclosed", "sheltered", "exposed")
+        classes = {
+            situation: classify_exposure(karur, situation).exposure.id for situation in situations
+        }
+        assert classes == {"enclosed": "mild", "sheltered": "moderate", "exposed": "severe"}
 
     def test_tidal_situation_is_extreme_regardless_of_climate(self) -> None:
         """A benign-looking climate must never downgrade an inherently harsh site."""
@@ -352,6 +413,33 @@ class TestFullAssessment:
         result = assess(climate(coast_km=5.0), selection)
 
         assert "coastal_psc_ppc" in result.followed_recommendation_ids
+
+    @pytest.mark.parametrize("walling", ["aac_block", "fly_ash_brick"])
+    def test_walling_recommendation_is_credited_when_followed(self, walling: str) -> None:
+        """Catalogue IDs use underscores; the table names them in prose.
+
+        'aac_block' must match "AAC blocks or fly-ash bricks"; compared raw it
+        never did, so this recommendation could not be followed by anyone.
+        """
+        selection = MaterialSelection(
+            concrete=ConcreteMix(grade="M30", cement_content_kg_m3=340, water_cement_ratio=0.45),
+            walling_material_id=walling,
+        )
+
+        result = assess(climate(temperature=41.0), selection)
+
+        assert "hot_aac_wall" in {r.id for r in result.applicable_recommendations}
+        assert "hot_aac_wall" in result.followed_recommendation_ids
+
+    def test_unrelated_walling_does_not_count_as_following(self) -> None:
+        selection = MaterialSelection(
+            concrete=ConcreteMix(grade="M30", cement_content_kg_m3=340, water_cement_ratio=0.45),
+            walling_material_id="burnt_clay_brick",
+        )
+
+        result = assess(climate(temperature=41.0), selection)
+
+        assert "hot_aac_wall" not in result.followed_recommendation_ids
 
     def test_assessment_is_deterministic(self) -> None:
         """The Phase 4 labels depend on this being a pure function."""
