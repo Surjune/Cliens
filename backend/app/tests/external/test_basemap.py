@@ -45,15 +45,29 @@ def _label_tile() -> bytes:
 LABEL_TILE = _label_tile()
 
 
+def _jpeg(colour: tuple[int, int, int]) -> bytes:
+    """A solid JPEG, standing in for an Esri imagery tile as actually served."""
+    buffer = BytesIO()
+    Image.new("RGB", (256, 256), colour).save(buffer, format="JPEG")
+    return buffer.getvalue()
+
+
+IMAGERY_PREFIX = "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/"
+LABELS_PREFIX = "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/"
+MAPBOX_PREFIX = "https://api.mapbox.com/"
+#: Not a credential: every Mapbox request in this module is intercepted by respx.
+MAPBOX_TEST_KEY = "pk.test"
+
+
 class TestTileCompositing:
     """Imagery is required; labels are a bonus that must never break the tile."""
 
     @respx.mock
     async def test_labels_are_burned_onto_the_imagery(self) -> None:
-        respx.get(url__startswith="https://clarity.maptiles.arcgis.com").mock(
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
             return_value=httpx.Response(200, content=IMAGERY_TILE)
         )
-        respx.get(url__startswith="https://server.arcgisonline.com").mock(
+        respx.get(url__startswith=LABELS_PREFIX).mock(
             return_value=httpx.Response(200, content=LABEL_TILE)
         )
 
@@ -71,22 +85,34 @@ class TestTileCompositing:
     @respx.mock
     async def test_a_missing_labels_layer_still_returns_imagery(self) -> None:
         """Esri has no label tiles at the deepest zooms; that is not an error."""
-        respx.get(url__startswith="https://clarity.maptiles.arcgis.com").mock(
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
             return_value=httpx.Response(200, content=IMAGERY_TILE)
         )
-        respx.get(url__startswith="https://server.arcgisonline.com").mock(
-            return_value=httpx.Response(404)
-        )
+        respx.get(url__startswith=LABELS_PREFIX).mock(return_value=httpx.Response(404))
 
         payload = await basemap.fetch_composited_tile(x=1, y=2, z=3)
         assert Image.open(BytesIO(payload)).size == (256, 256)
 
     @respx.mock
+    async def test_an_unlabelled_jpeg_tile_is_passed_through_untouched(self) -> None:
+        """With nothing to composite, re-encoding would only add time and loss."""
+        original = _jpeg((10, 60, 20))
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
+            return_value=httpx.Response(
+                200, content=original, headers={"content-type": "image/jpeg"}
+            )
+        )
+        respx.get(url__startswith=LABELS_PREFIX).mock(return_value=httpx.Response(404))
+
+        payload = await basemap.fetch_composited_tile(x=1, y=2, z=3)
+        assert payload == original
+
+    @respx.mock
     async def test_a_corrupt_labels_layer_still_returns_imagery(self) -> None:
-        respx.get(url__startswith="https://clarity.maptiles.arcgis.com").mock(
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
             return_value=httpx.Response(200, content=IMAGERY_TILE)
         )
-        respx.get(url__startswith="https://server.arcgisonline.com").mock(
+        respx.get(url__startswith=LABELS_PREFIX).mock(
             return_value=httpx.Response(200, content=b"this is not a png")
         )
 
@@ -94,51 +120,81 @@ class TestTileCompositing:
         assert Image.open(BytesIO(payload)).size == (256, 256)
 
     @respx.mock
-    async def test_falls_back_to_the_standard_layer_when_clarity_has_no_tile(
-        self,
-    ) -> None:
-        """Clarity coverage is patchier; a gap there must not be a hole in the map."""
-        respx.get(url__startswith="https://clarity.maptiles.arcgis.com").mock(
-            return_value=httpx.Response(404)
+    async def test_imagery_and_labels_are_each_requested_exactly_once(self) -> None:
+        """One round trip per tile: no retired source, no sequential fallback hop."""
+        imagery = respx.get(url__startswith=IMAGERY_PREFIX).mock(
+            return_value=httpx.Response(200, content=IMAGERY_TILE)
         )
-        respx.get(url__startswith="https://server.arcgisonline.com").mock(
-            side_effect=[
-                httpx.Response(200, content=LABEL_TILE),
-                httpx.Response(200, content=IMAGERY_TILE),
-            ]
+        labels = respx.get(url__startswith=LABELS_PREFIX).mock(
+            return_value=httpx.Response(200, content=LABEL_TILE)
         )
 
-        payload = await basemap.fetch_composited_tile(x=1, y=2, z=3)
+        await basemap.fetch_composited_tile(x=1, y=2, z=3)
+
+        assert imagery.call_count == 1
+        assert labels.call_count == 1
+        assert len(respx.calls) == 2
+
+    @respx.mock
+    async def test_mapbox_is_preferred_when_configured(self) -> None:
+        """The deeper source is the point of configuring a token."""
+        respx.get(url__startswith=MAPBOX_PREFIX).mock(
+            return_value=httpx.Response(200, content=_png((200, 0, 200, 255), size=512))
+        )
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
+            return_value=httpx.Response(200, content=IMAGERY_TILE)
+        )
+        respx.get(url__startswith=LABELS_PREFIX).mock(return_value=httpx.Response(404))
+
+        payload = await basemap.fetch_composited_tile(x=1, y=2, z=3, mapbox_token=MAPBOX_TEST_KEY)
+
+        image = Image.open(BytesIO(payload)).convert("RGB")
+        assert image.size == (512, 512)
+        pixel = image.getpixel((10, 10))
+        assert isinstance(pixel, tuple)
+        assert pixel[0] > pixel[1], "the Mapbox imagery, not Esri's, should be the base"
+
+    @respx.mock
+    async def test_falls_back_to_esri_when_mapbox_has_no_tile(self) -> None:
+        """A gap in the deeper source must not be a hole in the map."""
+        respx.get(url__startswith=MAPBOX_PREFIX).mock(return_value=httpx.Response(404))
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
+            return_value=httpx.Response(200, content=IMAGERY_TILE)
+        )
+        respx.get(url__startswith=LABELS_PREFIX).mock(
+            return_value=httpx.Response(200, content=LABEL_TILE)
+        )
+
+        payload = await basemap.fetch_composited_tile(x=1, y=2, z=3, mapbox_token=MAPBOX_TEST_KEY)
         assert Image.open(BytesIO(payload)).size == (256, 256)
 
     @respx.mock
-    async def test_falls_back_when_clarity_times_out(self) -> None:
-        """A slow provider is a reason to try the other one, not to fail."""
-        respx.get(url__startswith="https://clarity.maptiles.arcgis.com").mock(
+    async def test_falls_back_to_esri_when_mapbox_times_out(self) -> None:
+        """A slow provider is a reason to use the other one, not to fail."""
+        respx.get(url__startswith=MAPBOX_PREFIX).mock(
             side_effect=httpx.TimeoutException("too slow")
         )
-        respx.get(url__startswith="https://server.arcgisonline.com").mock(
-            side_effect=[
-                httpx.Response(200, content=LABEL_TILE),
-                httpx.Response(200, content=IMAGERY_TILE),
-            ]
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(
+            return_value=httpx.Response(200, content=IMAGERY_TILE)
+        )
+        respx.get(url__startswith=LABELS_PREFIX).mock(
+            return_value=httpx.Response(200, content=LABEL_TILE)
         )
 
-        payload = await basemap.fetch_composited_tile(x=1, y=2, z=3)
+        payload = await basemap.fetch_composited_tile(x=1, y=2, z=3, mapbox_token=MAPBOX_TEST_KEY)
         assert Image.open(BytesIO(payload)).size == (256, 256)
 
     @respx.mock
     async def test_errors_only_when_every_source_fails(self) -> None:
         """A silently empty tile would render as ocean and mislead the user."""
-        respx.get(url__startswith="https://clarity.maptiles.arcgis.com").mock(
-            return_value=httpx.Response(503)
-        )
-        respx.get(url__startswith="https://server.arcgisonline.com").mock(
-            side_effect=[httpx.Response(200, content=LABEL_TILE), httpx.Response(503)]
+        respx.get(url__startswith=MAPBOX_PREFIX).mock(return_value=httpx.Response(503))
+        respx.get(url__startswith=IMAGERY_PREFIX).mock(return_value=httpx.Response(503))
+        respx.get(url__startswith=LABELS_PREFIX).mock(
+            return_value=httpx.Response(200, content=LABEL_TILE)
         )
 
         with pytest.raises(ExternalServiceError):
-            await basemap.fetch_composited_tile(x=1, y=2, z=3)
+            await basemap.fetch_composited_tile(x=1, y=2, z=3, mapbox_token=MAPBOX_TEST_KEY)
 
 
 class TestGeocoding:

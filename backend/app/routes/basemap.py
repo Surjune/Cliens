@@ -122,7 +122,9 @@ def _tile_response(payload: bytes) -> Response:
     return Response(
         content=payload,
         media_type="image/jpeg",
-        headers={"Cache-Control": f"public, max-age={constants.TILE_CACHE_SECONDS}"},
+        # immutable: a tile URL never changes meaning within its max-age, so the
+        # browser can reuse it on reload without a revalidation round trip.
+        headers={"Cache-Control": f"public, max-age={constants.TILE_CACHE_SECONDS}, immutable"},
     )
 
 

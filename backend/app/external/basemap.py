@@ -41,22 +41,13 @@ MAPBOX_IMAGERY_URL = (
     "https://api.mapbox.com/v4/mapbox.satellite/{z}/{x}/{y}@2x.jpg90" "?access_token={token}"
 )
 
-#: Esri World Imagery Clarity — the preferred keyless source.
+#: Esri World Imagery — the keyless source, with complete global coverage.
 #:
-#: Same service family and licence as World Imagery below, drawing on Esri's
-#: higher-resolution pool. Measured over Coimbatore it returns roughly 40% more
-#: bytes per tile at the same zoom, which is less compression over sharper source
-#: photography. Its maximum useful level is the same z19.
-CLARITY_IMAGERY_URL = (
-    "https://clarity.maptiles.arcgis.com/arcgis/rest/services/"
-    "World_Imagery/MapServer/tile/{z}/{y}/{x}"
-)
-
-#: Esri World Imagery — the fallback.
-#:
-#: Kept because Clarity has patchier coverage and answers out-of-range tiles with
-#: an HTTP error rather than a placeholder. Without a fallback a Clarity gap would
-#: be a hole in the map; with one it is invisible.
+#: Esri's separate "Clarity" endpoint used to be tried first. It has since been
+#: retired: every tile now answers with two chained 301 redirects into an archived
+#: Wayback release, which added well over a second per tile and, measured over
+#: Coimbatore at z18-19, served older and less detailed photography than this
+#: layer. Standard World Imagery is now both the faster and the sharper source.
 IMAGERY_URL = (
     "https://server.arcgisonline.com/ArcGIS/rest/services/"
     "World_Imagery/MapServer/tile/{z}/{y}/{x}"
@@ -94,51 +85,85 @@ async def fetch_composited_tile(x: int, y: int, z: int, mapbox_token: str | None
     cannot be fetched the caller gets an error rather than a blank square, because
     a silently empty tile would look like ocean.
 
-    Imagery is tried from the sharper Clarity source first and falls back to the
-    standard layer, so a timeout or a gap in one provider is not by itself a
-    failure — it only becomes one when no source produced a usable image.
+    When a Mapbox token is configured the deeper Mapbox tile is preferred and Esri
+    is the fallback, so a gap in one provider is not by itself a failure — it only
+    becomes one when no source produced a usable image.
 
     Raises:
         ExternalServiceError: If no imagery source returned a usable tile.
     """
     client = get_client()
-    labels_url = LABELS_URL.format(x=x, y=y, z=z)
 
-    # The sharper source and the labels are requested together; waiting for one
-    # then the other would double the latency of every tile on the globe.
-    #
-    # return_exceptions: a failed labels layer must not take the imagery down with
-    # it, so both outcomes are inspected rather than the first failure propagating.
-    clarity_task = client.get(
-        CLARITY_IMAGERY_URL.format(x=x, y=y, z=z),
-        timeout=constants.EXTERNAL_REQUEST_TIMEOUT_SECONDS,
+    # Every source is requested at once, so a tile costs one upstream round trip
+    # rather than one per source tried. Fetching the fallback speculatively is
+    # free — Esri is keyless — and is what keeps a Mapbox gap from adding a second
+    # round trip to that tile.
+    requests = [
+        _fetch(client, IMAGERY_URL.format(x=x, y=y, z=z)),
+        _fetch(client, LABELS_URL.format(x=x, y=y, z=z)),
+    ]
+    if mapbox_token is not None:
+        requests.append(
+            _fetch(client, MAPBOX_IMAGERY_URL.format(x=x, y=y, z=z, token=mapbox_token))
+        )
+    esri_response, labels_response, *mapbox_response = await asyncio.gather(*requests)
+
+    # Decoding, compositing and re-encoding are CPU-bound. Run inline they stall
+    # the event loop, so every other tile the map is waiting on queues behind this
+    # one; on a worker thread the next tiles' network I/O keeps flowing meanwhile.
+    return await asyncio.to_thread(
+        _composite,
+        esri_response,
+        labels_response,
+        mapbox_response[0] if mapbox_response else None,
+        x=x,
+        y=y,
+        z=z,
     )
-    labels_task = client.get(labels_url, timeout=constants.EXTERNAL_REQUEST_TIMEOUT_SECONDS)
 
-    clarity_response, labels_response = await asyncio.gather(
-        clarity_task, labels_task, return_exceptions=True
+
+def _composite(
+    esri_response: httpx.Response | BaseException,
+    labels_response: httpx.Response | BaseException,
+    mapbox_response: httpx.Response | BaseException | None,
+    *,
+    x: int,
+    y: int,
+    z: int,
+) -> bytes:
+    """Flatten the best available imagery and the labels into one JPEG.
+
+    Raises:
+        ExternalServiceError: If no imagery source returned a usable tile.
+    """
+    labels = (
+        labels_response
+        if isinstance(labels_response, httpx.Response)
+        and labels_response.status_code == httpx.codes.OK
+        else None
     )
 
     # Deepest source first when it is available. Ordering the chain by detail
     # rather than by cost is deliberate: the whole point of configuring a token is
     # to get imagery the free sources cannot supply.
     base: Image.Image | None = None
-    if mapbox_token is not None:
-        base = _decode_imagery(
-            await _fetch(client, MAPBOX_IMAGERY_URL.format(x=x, y=y, z=z, token=mapbox_token))
-        )
+    if mapbox_response is not None:
+        base = _decode_imagery(mapbox_response)
         if base is None:
             logger.info("mapbox_tile_unavailable_falling_back", z=z, x=x, y=y)
 
     if base is None:
-        base = _decode_imagery(clarity_response)
-    if base is None:
-        # Clarity had no usable tile here. Fall back rather than leave a hole:
-        # the standard layer covers everywhere, just less sharply.
-        logger.info("clarity_tile_unavailable_falling_back", z=z, x=x, y=y)
-        base = _decode_imagery(
-            await _fetch(client, IMAGERY_URL.format(x=x, y=y, z=z)),
-        )
+        # With nothing to burn in, Esri's own JPEG is already the finished tile.
+        # Passing its bytes through skips a decode and a re-encode, and avoids the
+        # generation loss a second JPEG pass would add.
+        if (
+            labels is None
+            and isinstance(esri_response, httpx.Response)
+            and esri_response.status_code == httpx.codes.OK
+            and esri_response.headers.get("content-type", "").startswith("image/jpeg")
+        ):
+            return esri_response.content
+        base = _decode_imagery(esri_response)
 
     if base is None:
         raise ExternalServiceError(
@@ -154,12 +179,9 @@ async def fetch_composited_tile(x: int, y: int, z: int, mapbox_token: str | None
 
     # Labels are best-effort. Anything other than a usable PNG leaves the imagery
     # unlabelled rather than failing the tile.
-    if (
-        isinstance(labels_response, httpx.Response)
-        and labels_response.status_code == httpx.codes.OK
-    ):
+    if labels is not None:
         try:
-            overlay = Image.open(BytesIO(labels_response.content)).convert("RGBA")
+            overlay = Image.open(BytesIO(labels.content)).convert("RGBA")
             if overlay.size != labels_size:
                 overlay = overlay.resize(labels_size, Image.Resampling.LANCZOS)
             # The overlay is its own alpha mask, so labels land on the imagery
@@ -176,12 +198,15 @@ async def fetch_composited_tile(x: int, y: int, z: int, mapbox_token: str | None
     # destroys thin coloured type. Measured on a labelled tile, turning it off cut
     # the error on label pixels from 17.7 to 7.6 — better than WebP at any quality
     # tried, and smaller.
+    #
+    # optimize is deliberately left off: it adds a second entropy-coding pass to
+    # every tile for a few percent of size, and on a map the user is actively
+    # zooming, time-to-pixels matters more than those bytes.
     base.save(
         buffer,
         format="JPEG",
         quality=constants.TILE_IMAGE_QUALITY,
         subsampling=constants.TILE_CHROMA_SUBSAMPLING,
-        optimize=True,
     )
     return buffer.getvalue()
 

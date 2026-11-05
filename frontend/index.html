@@ -26,6 +26,10 @@
          to — this is the first webfont the app actually fetches. `display=swap`
          means text paints immediately in the fallback stack and swaps once the
          font arrives, rather than staying invisible while it loads. -->
+    <!-- The flat map fetches imagery and labels straight from Esri. Opening that
+         connection while the app boots means the first zoom does not wait on a
+         DNS lookup and TLS handshake before any tile can load. -->
+    <link rel="preconnect" href="https://server.arcgisonline.com" crossorigin />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

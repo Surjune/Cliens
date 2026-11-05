@@ -83,6 +83,14 @@ const FALLBACK_TILE_LEVEL = 19;
 const TILE_URL = (x: number, y: number, level: number): string =>
   `/api/tiles/${String(level)}/${String(x)}/${String(y)}`;
 
+/**
+ * Duration of a camera move triggered by a zoom button or a search result.
+ *
+ * Was 1800 ms, which made each zoom-button press feel like waiting rather than
+ * zooming. 600 ms still reads as motion, so the user keeps their bearings.
+ */
+const CAMERA_FLIGHT_MS = 600;
+
 /** How close, in pixels, a click must land to the first vertex to close a ring. */
 const CLOSE_RING_PIXELS = 14;
 
@@ -193,7 +201,10 @@ export function DistrictGlobe({
     // Zoom speed is constant in OrbitControls, which makes the last few metres
     // crawl and the first few thousand kilometres lurch. Damping plus a moderate
     // rate is the closest this control model gets to a proportional zoom.
-    controls.zoomSpeed = 1.1;
+    // 2.5 rather than the earlier 1.1: each wheel notch now covers roughly twice
+    // the distance, so descending from orbit to the map handover takes a few
+    // flicks instead of a long scroll.
+    controls.zoomSpeed = 2.5;
     controls.minDistance = GLOBE_RADIUS_UNITS * (1 + MIN_ALTITUDE);
     controls.maxDistance = GLOBE_RADIUS_UNITS * (1 + MAX_ALTITUDE);
 
@@ -235,7 +246,7 @@ export function DistrictGlobe({
     }
     globeRef.current?.pointOfView(
       { lat: target.latitude, lng: target.longitude, altitude: target.altitude },
-      prefersReducedMotion() ? 0 : 1800
+      prefersReducedMotion() ? 0 : CAMERA_FLIGHT_MS
     );
   }, [target, ready]);
 

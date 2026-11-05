@@ -18,7 +18,7 @@
     "hooks:run": "node scripts/py.mjs -m pre_commit run --config config/.pre-commit-config.yaml --all-files",
     "db:migrate": "node scripts/py.mjs -m alembic upgrade head",
     "db:seed": "node scripts/py.mjs -m app.cli seed-materials",
-    "dev:backend": "node scripts/py.mjs -m uvicorn app.main:app --reload --port 8010",
+    "dev:backend": "node scripts/py.mjs -m uvicorn app.main:app --reload --reload-dir app --port 8010",
     "dev:frontend": "npm run dev --workspace frontend",
     "generate:types": "node scripts/generate-types.mjs",
     "lint:backend": "node scripts/py.mjs -m ruff check --config pyproject.toml app ../db/migrations && node scripts/py.mjs -m black --check --config pyproject.toml app ../db/migrations",

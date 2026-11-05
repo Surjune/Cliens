@@ -14,6 +14,7 @@
  * cannot tell which one drew the outline.
  *
  * TILES COME STRAIGHT FROM THE PROVIDER, NOT THROUGH OUR API
+ * (`index.html` preconnects to the tile host so the first zoom skips the TLS handshake.)
  * The globe has to use our compositing endpoint because it paints a single image
  * layer, so the imagery and its labels must be flattened into one picture first.
  * Leaflet stacks layers natively, so that flattening is not just unnecessary here
@@ -53,8 +54,6 @@ const LABEL_MAX_ZOOM = 18;
 const ESRI_BASE = 'https://server.arcgisonline.com/ArcGIS/rest/services';
 const ESRI_WORLD_IMAGERY = `${ESRI_BASE}/World_Imagery/MapServer/tile/{z}/{y}/{x}`;
 const ESRI_LABELS = `${ESRI_BASE}/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}`;
-const ESRI_CLARITY =
-  'https://clarity.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
 
 /**
  * How close, in pixels, a click must land to the first vertex to close the ring.
@@ -134,13 +133,15 @@ export function SiteMap({
       // Continuous rather than stepped zoom, so the wheel feels like the globe's
       // rather than jumping a whole power of two per notch.
       zoomSnap: 0,
-      zoomDelta: 0.4,
+      zoomDelta: 1,
       // Leaflet's default is a hard 1:1 wheel step, which feels stepped after the
       // globe's continuous zoom. Scroll-wheel smoothing makes the handover between
-      // the two views far less jarring.
+      // the two views far less jarring. 50 px per level (Leaflet's default is 60,
+      // this used to be 100) means one notch of a mouse wheel covers a full zoom
+      // level, so reaching street level takes a flick rather than a long scroll.
       scrollWheelZoom: true,
-      wheelDebounceTime: 20,
-      wheelPxPerZoomLevel: 100,
+      wheelDebounceTime: 10,
+      wheelPxPerZoomLevel: 50,
     });
 
     // Shared by every layer. `maxNativeZoom` is the deepest level actually
@@ -153,6 +154,9 @@ export function SiteMap({
       // Keep a ring of tiles beyond the viewport so a pan reveals imagery that is
       // already loaded rather than grey.
       keepBuffer: 4,
+      // How often tiles are re-requested while panning. Half Leaflet's 200 ms
+      // default, so newly exposed ground starts loading sooner.
+      updateInterval: 100,
       // Load during a pan rather than waiting for it to stop, which otherwise
       // reads as the map freezing while you drag.
       updateWhenIdle: false,
@@ -163,17 +167,14 @@ export function SiteMap({
       crossOrigin: true,
     };
 
-    // Bottom: the layer with complete global coverage. It is the safety net that
-    // shows through wherever a sharper layer above has no tile, which is why a
-    // Clarity gap never appears as a hole.
+    // Imagery. Esri's separate "Clarity" layer used to be stacked on top of this
+    // one; it has been retired, and every Clarity tile now costs two chained
+    // redirects into an archived snapshot that is older and blurrier than this
+    // layer. Dropping it halves the imagery requests per zoom and removes over a
+    // second of latency from each tile.
     L.tileLayer(ESRI_WORLD_IMAGERY, { ...tileOptions, attribution }).addTo(map);
 
-    // Middle: Esri's higher-resolution pool. Measured at roughly twice the edge
-    // detail of the base layer at zoom 17-18. Coverage is patchy by design, hence
-    // the layer beneath.
-    L.tileLayer(ESRI_CLARITY, tileOptions).addTo(map);
-
-    // Top: roads, boundaries and place names, already transparent.
+    // Roads, boundaries and place names, already transparent.
     L.tileLayer(ESRI_LABELS, { ...tileOptions, maxNativeZoom: LABEL_MAX_ZOOM }).addTo(map);
 
     mapRef.current = map;

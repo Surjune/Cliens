@@ -21,7 +21,10 @@ export default defineConfig({
       // development, so CORS behaviour in dev matches production deployment
       // behind a single origin.
       '/api': {
-        target: 'http://localhost:8010',
+        // 127.0.0.1 rather than localhost: on Windows `localhost` resolves to
+        // IPv6 ::1 first, uvicorn listens on IPv4 only, and the failed attempt
+        // added ~200 ms to every proxied request — every globe tile included.
+        target: 'http://127.0.0.1:8010',
         changeOrigin: true,
       },
     },

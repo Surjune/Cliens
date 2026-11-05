@@ -268,6 +268,16 @@ EXTERNAL_RETRY_INITIAL_BACKOFF_SECONDS: Final[float] = 0.5
 EXTERNAL_RETRY_MAX_BACKOFF_SECONDS: Final[float] = 8.0
 RETRYABLE_HTTP_STATUS_CODES: Final[frozenset[int]] = frozenset({408, 429, 500, 502, 503, 504})
 
+# Connection pool for the shared outbound client. Map tiles dominate it: each
+# composited tile is two concurrent upstream requests, and a single globe view asks
+# for thirty or more tiles at once. Esri serves over HTTP/1.1, so every in-flight
+# request needs its own connection — the previous ceiling of 20 meant only ten
+# tiles could load at a time and the rest queued, which is what made a zoom fill in
+# row by row. Keep-alive is kept high so a zoom reuses warm TLS connections rather
+# than paying a fresh handshake per tile.
+EXTERNAL_MAX_CONNECTIONS: Final[int] = 100
+EXTERNAL_MAX_KEEPALIVE_CONNECTIONS: Final[int] = 50
+
 # ---------------------------------------------------------------------------
 # Damage vulnerability curve
 #
@@ -494,9 +504,11 @@ MAX_TILE_ZOOM: Final[int] = MAX_TILE_ZOOM_MAPBOX
 # not about freshness.
 TILE_CACHE_SECONDS: Final[int] = 86_400
 
-# Composited tiles held in memory. At roughly 40 KB each this is a few tens of MB,
-# which buys smooth panning without growing without bound.
-TILE_CACHE_ENTRIES: Final[int] = 512
+# Composited tiles held in memory. At roughly 20-40 KB each this is under 100 MB.
+# Zooming in and back out revisits every level of the pyramid on the way, so the
+# cache has to hold several screens per level for a zoom-out to be served from
+# memory instead of going back upstream; 512 held barely two.
+TILE_CACHE_ENTRIES: Final[int] = 3_000
 
 # Nominatim's usage policy requires an identifying User-Agent naming the
 # application. Requests without one are refused.
