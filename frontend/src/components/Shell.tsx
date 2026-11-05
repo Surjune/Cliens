@@ -4,7 +4,7 @@
  */
 import { motion, useReducedMotion } from 'motion/react';
 import type { ReactNode } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 
 import { useSession } from '@/state/session-context';
 import { useVoice } from '@/state/voice-context';
@@ -56,7 +56,9 @@ export function VoiceToggle() {
         setEnabled(!enabled);
       }}
       aria-pressed={enabled}
-      aria-label={enabled ? 'Turn off Tamil voice explanations' : 'Turn on Tamil voice explanations'}
+      aria-label={
+        enabled ? 'Turn off Tamil voice explanations' : 'Turn on Tamil voice explanations'
+      }
       className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.12em] transition-colors ${
         enabled
           ? 'border-atmos/50 bg-atmos/12 text-atmos'
@@ -69,35 +71,91 @@ export function VoiceToggle() {
   );
 }
 
+/**
+ * Progress through the flow.
+ *
+ * Completed steps are links, so changing an earlier answer is one click rather
+ * than a run of Back presses. Upcoming steps are not: each depends on the one
+ * before. In "recommend" mode the Materials step is marked as skipped rather than
+ * shown as done, since the user never filled it in.
+ */
 export function StepRail() {
   const location = useLocation();
+  const { spec } = useSession();
   const activeIndex = STEPS.findIndex((step) => step.path === location.pathname);
 
   return (
     <nav aria-label="Progress" className="flex flex-wrap items-center gap-2">
-      {STEPS.map((step, index) => {
-        const state =
-          index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'upcoming';
-        return (
-          <div key={step.path} className="flex items-center gap-2">
+      <ol className="flex flex-wrap items-center gap-2">
+        {STEPS.map((step, index) => {
+          const skipped =
+            step.path === '/materials' && !spec.evaluateOwnMaterials && index < activeIndex;
+          const state = skipped
+            ? 'skipped'
+            : index < activeIndex
+              ? 'done'
+              : index === activeIndex
+                ? 'active'
+                : 'upcoming';
+
+          const marker = (
             <span
-              aria-current={state === 'active' ? 'step' : undefined}
-              className={`text-[11px] font-medium uppercase tracking-[0.14em] transition-colors ${
+              aria-hidden="true"
+              className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${
+                state === 'active'
+                  ? 'bg-atmos text-void'
+                  : state === 'done'
+                    ? 'bg-atmos/20 text-atmos'
+                    : 'border border-white/20 text-ink-3'
+              }`}
+            >
+              {state === 'done' ? '✓' : index + 1}
+            </span>
+          );
+          const text = (
+            <span
+              className={`text-[11px] font-medium uppercase tracking-[0.14em] ${
                 state === 'active'
                   ? 'text-atmos'
                   : state === 'done'
                     ? 'text-ink-2'
-                    : 'text-ink-3/50'
+                    : state === 'skipped'
+                      ? 'text-ink-3 line-through'
+                      : 'text-ink-3'
               }`}
             >
               {step.label}
             </span>
-            {index < STEPS.length - 1 && (
-              <span aria-hidden="true" className="h-px w-5 bg-white/12" />
-            )}
-          </div>
-        );
-      })}
+          );
+
+          return (
+            <li key={step.path} className="flex items-center gap-2">
+              {state === 'done' ? (
+                <Link
+                  to={step.path}
+                  className="flex items-center gap-1.5 rounded-full px-1 py-0.5 transition-colors hover:bg-white/[0.06] focus-visible:outline focus-visible:outline-2 focus-visible:outline-atmos"
+                  aria-label={`${step.label} (completed) — go back to this step`}
+                >
+                  {marker}
+                  {text}
+                </Link>
+              ) : (
+                <span
+                  className="flex items-center gap-1.5 px-1 py-0.5"
+                  aria-current={state === 'active' ? 'step' : undefined}
+                  title={state === 'skipped' ? 'Skipped — we recommended a mix instead' : undefined}
+                >
+                  {marker}
+                  {text}
+                </span>
+              )}
+              {index < STEPS.length - 1 && (
+                <span aria-hidden="true" className="h-px w-4 bg-white/15" />
+              )}
+            </li>
+          );
+        })}
+      </ol>
       <VoiceToggle />
     </nav>
   );

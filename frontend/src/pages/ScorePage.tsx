@@ -40,8 +40,22 @@ function materialsPayload(spec: SiteSpecification): MaterialSelectionInput | nul
 }
 
 export default function ScorePage() {
-  const { spec, area } = useSession();
+  const { spec, area, update } = useSession();
   const navigate = useNavigate();
+
+  // In "recommend" mode the Materials step was skipped, so sending the user there
+  // to "change" materials they never entered made no sense — and saved nothing,
+  // because the score page would still recommend rather than evaluate. This
+  // switches to evaluating their own mix first.
+  const editMaterials = () => {
+    if (!spec.evaluateOwnMaterials) {
+      update({ evaluateOwnMaterials: true });
+    }
+    void navigate('/materials');
+  };
+  const materialsActionLabel = spec.evaluateOwnMaterials
+    ? 'Change my materials'
+    : 'Check my own materials instead';
   const reduced = useReducedMotion();
   const [result, setResult] = useState<ScoreResponse | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -50,14 +64,12 @@ export default function ScorePage() {
 
   // Two report endpoints for the same reason there are two score endpoints: a
   // drawn outline has no district name, and the district report requires one.
-  const report = useAction(
-    async (): Promise<Blob> => {
-      const outlineBounds = area === null ? null : boundsOf(area);
-      return outlineBounds !== null
-        ? apiClient.downloadAreaReport(outlineBounds, materialsPayload(spec), spec.situation)
-        : apiClient.downloadReport(spec.district, materialsPayload(spec), spec.situation);
-    }
-  );
+  const report = useAction(async (): Promise<Blob> => {
+    const outlineBounds = area === null ? null : boundsOf(area);
+    return outlineBounds !== null
+      ? apiClient.downloadAreaReport(outlineBounds, materialsPayload(spec), spec.situation)
+      : apiClient.downloadReport(spec.district, materialsPayload(spec), spec.situation);
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -137,7 +149,7 @@ export default function ScorePage() {
           <Button
             variant="secondary"
             onClick={() => {
-              void navigate('/materials');
+              void navigate(spec.evaluateOwnMaterials ? '/materials' : '/mode');
             }}
           >
             Go back and change something
@@ -231,9 +243,7 @@ export default function ScorePage() {
                           // This row is not a spec-versus-limit comparison, so the
                           // numeric columns are blank and the reason goes here
                           // instead — see `isSpecComparison`.
-                          <span className="mt-0.5 block text-xs text-ink-3">
-                            {finding.message}
-                          </span>
+                          <span className="mt-0.5 block text-xs text-ink-3">{finding.message}</span>
                         )}
                       </td>
                       <td className="tabular py-2.5 text-right text-ink-2">
@@ -262,9 +272,7 @@ export default function ScorePage() {
 
           {result.recommendations.length > 0 && (
             <Panel className="p-6">
-              <h2 className="text-base font-semibold text-ink-1">
-                Recommended for this climate
-              </h2>
+              <h2 className="text-base font-semibold text-ink-1">Recommended for this climate</h2>
               <ul className="mt-4 space-y-4">
                 {result.recommendations.map((recommendation) => (
                   <li key={recommendation.id} className="text-sm">
@@ -287,8 +295,8 @@ export default function ScorePage() {
           <Panel className="p-6">
             <h2 className="text-base font-semibold text-ink-1">Take this with you</h2>
             <p className="mt-1 text-sm leading-relaxed text-ink-2">
-              A one-page summary you can hand to your contractor, with the
-              specification and the code clause behind each item.
+              A one-page summary you can hand to your contractor, with the specification and the
+              code clause behind each item.
             </p>
             <div className="mt-4 flex flex-wrap gap-3">
               <Button
@@ -299,13 +307,16 @@ export default function ScorePage() {
               >
                 {report.loading ? 'Preparing…' : 'Download the report (PDF)'}
               </Button>
+              <Button variant="secondary" onClick={editMaterials}>
+                {materialsActionLabel}
+              </Button>
               <Button
-                variant="secondary"
+                variant="ghost"
                 onClick={() => {
-                  void navigate('/materials');
+                  void navigate('/exposure');
                 }}
               >
-                Change my materials
+                Change exposure
               </Button>
             </div>
             {report.error !== null && (
@@ -316,9 +327,9 @@ export default function ScorePage() {
           </Panel>
 
           <p className="text-xs leading-relaxed text-ink-3">
-            Score computed by {result.model_version}, from IS 456 compliance margins.
-            It reflects code compliance against measured climate — it is not a
-            prediction of whether a building will fail.
+            Score computed by {result.model_version}, from IS 456 compliance margins. It reflects
+            code compliance against measured climate — it is not a prediction of whether a building
+            will fail.
           </p>
 
           <Popup
@@ -360,19 +371,18 @@ export default function ScorePage() {
                 already asking where the numbers came from. */}
             {result.climate_provenance?.interpolated === true && (
               <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-relaxed text-ink-3">
-                No measured cell falls inside your boundary, so these figures were
-                interpolated from the nearest measured cells —{' '}
-                {result.climate_provenance.source_districts.join(', ')} — the closest{' '}
-                {result.climate_provenance.nearest_source_km.toFixed(0)} km away.
+                No measured cell falls inside your boundary, so these figures were interpolated from
+                the nearest measured cells — {result.climate_provenance.source_districts.join(', ')}{' '}
+                — the closest {result.climate_provenance.nearest_source_km.toFixed(0)} km away.
               </p>
             )}
 
             <p className="mt-5 border-t border-white/10 pt-4 text-xs leading-relaxed text-ink-3">
               Observed {result.data_source['observation_start'] ?? '—'} to{' '}
-              {result.data_source['observation_end'] ?? '—'}. Wet hours is the fraction
-              of sampled hours with rainfall, used instead of an annual total because
-              the source accumulates over one hour per day — an annual depth would
-              require assuming a daily cycle the data does not contain.
+              {result.data_source['observation_end'] ?? '—'}. Wet hours is the fraction of sampled
+              hours with rainfall, used instead of an annual total because the source accumulates
+              over one hour per day — an annual depth would require assuming a daily cycle the data
+              does not contain.
             </p>
           </Popup>
         </div>

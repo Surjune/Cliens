@@ -15,13 +15,7 @@ import { ApiError } from '@/lib/api-client';
 /** One spring, used for every entrance in the app, so motion feels like one hand. */
 export const SPRING = { type: 'spring', stiffness: 420, damping: 34, mass: 0.9 } as const;
 
-export function Panel({
-  children,
-  className = '',
-}: {
-  children: ReactNode;
-  className?: string;
-}) {
+export function Panel({ children, className = '' }: { children: ReactNode; className?: string }) {
   return <div className={`glass rounded-2xl ${className}`}>{children}</div>;
 }
 
@@ -48,8 +42,7 @@ export function Button({
   const styles: Record<string, string> = {
     primary:
       'bg-atmos text-void shadow-[0_3px_0_var(--color-atmos-deep),0_8px_24px_-6px_oklch(0.78_0.13_220/0.5)]',
-    secondary:
-      'bg-slate-2 text-ink-1 shadow-[0_3px_0_var(--color-slate-1)] border border-white/10',
+    secondary: 'bg-slate-2 text-ink-1 shadow-[0_3px_0_var(--color-slate-1)] border border-white/10',
     ghost: 'text-ink-2 hover:text-ink-1 shadow-none',
   };
 
@@ -218,14 +211,69 @@ export function Popup({
             <h2 id={titleId} className="text-lg font-semibold tracking-tight text-ink-1">
               {title}
             </h2>
-            {description !== undefined && (
-              <p className="mt-1 text-sm text-ink-3">{description}</p>
-            )}
+            {description !== undefined && <p className="mt-1 text-sm text-ink-3">{description}</p>}
             <div className="mt-5">{children}</div>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * What the site requires, as one line: class, then the three IS 456 Table 5
+ * limits. Shared by the Exposure and Materials steps so both read identically.
+ */
+export function RequirementsSummary({
+  exposureLabel,
+  minGrade,
+  minCementKgM3,
+  maxWaterCementRatio,
+}: {
+  exposureLabel: string;
+  minGrade: string;
+  minCementKgM3: number;
+  maxWaterCementRatio: number;
+}) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-3">
+        Your site needs
+      </p>
+      <p className="mt-1 text-lg font-semibold text-ink-1">
+        <span className="text-atmos">{exposureLabel}</span> exposure
+      </p>
+      <dl className="tabular mt-3 grid grid-cols-3 gap-3 text-center">
+        <RequirementCell label="Grade" value={`≥ ${minGrade}`} />
+        <RequirementCell label="Cement" value={`≥ ${minCementKgM3.toFixed(0)}`} unit="kg/m³" />
+        <RequirementCell label="W/C ratio" value={`≤ ${maxWaterCementRatio.toFixed(2)}`} />
+      </dl>
+    </div>
+  );
+}
+
+function RequirementCell({ label, value, unit }: { label: string; value: string; unit?: string }) {
+  return (
+    <div className="rounded-lg border border-white/10 bg-white/[0.03] px-2 py-2.5">
+      <dt className="text-[10px] uppercase tracking-[0.12em] text-ink-3">{label}</dt>
+      <dd className="mt-0.5 text-base font-semibold text-ink-1">
+        {value}
+        {unit !== undefined && <span className="ml-1 text-[10px] text-ink-3">{unit}</span>}
+      </dd>
+    </div>
+  );
+}
+
+/** A small meets/short badge beside a value the code checks. */
+export function CheckBadge({ ok }: { ok: boolean }) {
+  return (
+    <span
+      className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.1em] ${
+        ok ? 'bg-band-good/15 text-band-good' : 'bg-band-poor/15 text-band-poor'
+      }`}
+    >
+      {ok ? 'Meets' : 'Short'}
+    </span>
   );
 }
 
@@ -256,9 +304,7 @@ export function ChoiceCard({
           : 'border-white/10 bg-white/[0.03] hover:border-white/25 shadow-[0_3px_0_rgba(0,0,0,0.35)]'
       }`}
     >
-      <span
-        className={`block text-sm font-semibold ${selected ? 'text-atmos' : 'text-ink-1'}`}
-      >
+      <span className={`block text-sm font-semibold ${selected ? 'text-atmos' : 'text-ink-1'}`}>
         {label}
       </span>
       <span className="mt-0.5 block text-xs text-ink-3">{hint}</span>

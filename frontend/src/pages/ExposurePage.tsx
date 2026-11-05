@@ -18,16 +18,18 @@ import { PageShell } from '@/components/Shell';
 import { VoiceExplainer } from '@/components/VoiceExplainer';
 import { buildNarration, TA } from '@/lib/narration.ta';
 import { useVoice } from '@/state/voice-context';
-import { Button, ChoiceCard } from '@/components/ui';
+import { Button, ChoiceCard, ErrorNotice, RequirementsSummary, Spinner } from '@/components/ui';
+import { gradeLabel, useSiteRequirements } from '@/hooks/useSiteRequirements';
 import { useSession } from '@/state/session-context';
 import { ELEMENT_SITUATIONS } from '@/types/api';
 
 /** Consequence text, so a choice is made knowingly rather than guessed at. */
 const CONSEQUENCE: Record<string, string> = {
-  enclosed: 'Mildest case. The code allows the leanest mix here.',
-  sheltered: 'Slightly stricter than enclosed.',
-  exposed: 'The common case for outdoor structure, and the usual default.',
-  buried: 'Soil holds moisture and salts against the concrete, so the code tightens.',
+  enclosed: 'Mildest case — the leanest mix the code allows, unless the site is coastal.',
+  sheltered: 'Moderate. Salt air near the coast still reaches it, so it tightens there.',
+  exposed:
+    'Rain, wetting and drying and humidity all count here, so this is usually Severe in Tamil Nadu.',
+  buried: 'Moderate inland; near the coast the ground water is brackish and it tightens.',
   tidal: 'The most severe class in IS 456. Expect a high grade and a low w/c ratio.',
 };
 
@@ -35,6 +37,7 @@ export default function ExposurePage() {
   const { spec, update, area } = useSession();
   const navigate = useNavigate();
   const voice = useVoice();
+  const site = useSiteRequirements(spec.district, area, spec.situation);
 
   return (
     <PageShell
@@ -68,6 +71,30 @@ export default function ExposurePage() {
               }}
             />
           ))}
+
+          {/* The class this choice actually produces at this site, live. The
+              explainer says the class comes from the answer *and* the measured
+              climate; this shows the result instead of leaving it a mystery until
+              the score page. */}
+          <div aria-live="polite" className="glass rounded-2xl p-5 sm:col-span-2">
+            {site.status === 'loading' && <Spinner label="Checking what this site needs…" />}
+            {site.status === 'error' && <ErrorNotice error={site.error} />}
+            {site.status === 'ready' && (
+              <>
+                <RequirementsSummary
+                  exposureLabel={site.requirements.exposureLabel}
+                  minGrade={gradeLabel(site.requirements.minGradeMpa)}
+                  minCementKgM3={site.requirements.minCementKgM3}
+                  maxWaterCementRatio={site.requirements.maxWaterCementRatio}
+                />
+                <ul className="mt-4 space-y-1 border-t border-white/10 pt-3 text-xs text-ink-3">
+                  {site.requirements.reasons.map((reason) => (
+                    <li key={reason}>— {reason}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         </div>
 
         <aside
@@ -80,10 +107,9 @@ export default function ExposurePage() {
           <p className="mt-0.5 text-xs text-ink-3">IS 456:2000, Table 3 and Table 5.</p>
 
           <p className="mt-4 text-sm leading-relaxed text-ink-2">
-            The code does not set one standard for all concrete. It sorts an element
-            into an exposure class by how much water, salt and air reaches it, then
-            sets a different minimum grade, minimum cement content and maximum
-            water/cement ratio for each class.
+            The code does not set one standard for all concrete. It sorts an element into an
+            exposure class by how much water, salt and air reaches it, then sets a different minimum
+            grade, minimum cement content and maximum water/cement ratio for each class.
           </p>
 
           <ul className="mt-4 space-y-2.5 border-t border-white/10 pt-4">
@@ -93,9 +119,7 @@ export default function ExposurePage() {
                 <li key={situation.value} className="text-sm">
                   {/* The selected class is highlighted here too, so the panel
                       answers "what did I just pick" as well as "what are these". */}
-                  <span
-                    className={`font-semibold ${active ? 'text-atmos' : 'text-ink-1'}`}
-                  >
+                  <span className={`font-semibold ${active ? 'text-atmos' : 'text-ink-1'}`}>
                     {situation.label}
                   </span>
                   <span className={active ? 'text-ink-2' : 'text-ink-3'}>
@@ -108,9 +132,9 @@ export default function ExposurePage() {
           </ul>
 
           <p className="mt-4 border-t border-white/10 pt-4 text-xs leading-relaxed text-ink-3">
-            Your district&rsquo;s measured humidity, wet hours and distance from the coast
-            are combined with this answer to pick the final class. You are not choosing
-            the class directly.
+            Your district&rsquo;s measured humidity, wet hours and distance from the coast are
+            combined with this answer to pick the final class. You are not choosing the class
+            directly.
           </p>
         </aside>
       </div>
